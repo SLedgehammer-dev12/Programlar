@@ -1,0 +1,82 @@
+# Genel
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*~
+*.swp
+*.swo
+*.swn
+
+# IDE ve Editörler
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.settings/
+*.iml
+*.ipr
+*.iws
+
+# Log dosyaları
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Bağımlılıklar
+node_modules/
+bower_components/
+vendor/
+venv/
+env/
+.env
+.env.local
+.env.*.local
+
+# Build çıktıları
+dist/
+build/
+out/
+target/
+*.class
+*.jar
+*.war
+*.ear
+*.pyc
+*.pyo
+__pycache__/
+
+# Sistem ve geçici dosyalar
+*.tmp
+*.temp
+*.cache
+.cache/
+
+# Paket yöneticileri
+package-lock.json
+yarn.lock
+Pipfile.lock
+composer.lock
+
+# Veritabanı
+*.sqlite
+*.sqlite3
+*.db
+
+# Sıkıştırılmış dosyalar
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Backup dosyaları
+*.bak
+*.backup
+*.old
