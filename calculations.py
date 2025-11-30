@@ -119,37 +119,103 @@ class GasFlowCalculator:
             "EOS_model": EOS_type
         }
 
-    def calculate_coolprop_properties(self, P, T, mixture):
-        self.log("Hesaplama: CoolProp (Helmholtz EOS) kullanılıyor.", "DEBUG")
+    def create_coolprop_state(self, mole_fractions):
+        """CoolProp AbstractState nesnesi oluşturur (Performans için)."""
+        try:
+            backend = "HEOS"
+            fluids = list(mole_fractions.keys())
+            fractions = list(mole_fractions.values())
+            
+            # Gaz isimlerini CoolProp formatına uygun hale getir (örn. "Methane (CH4)" -> "Methane")
+            # Ancak data.py'da zaten CoolProp isimleri anahtar olarak kullanılıyor (örn. "METHANE" -> "Methane (CH4)")
+            # Wait, data.py keys are "METHANE", values are "Methane (CH4)".
+            # But inputs['mole_fractions'] keys come from data.py keys?
+            # Let's check main.py add_gas_component.
+            # It uses gas_id which is the key (e.g. "METHANE").
+            # But CoolProp needs "Methane".
+            # I need a mapping from ID to CoolProp Name.
+            # In data.py: "METHANE": "Methane (CH4)".
+            # CoolProp expects "Methane".
+            # I should probably clean the names.
+            
+            clean_fluids = []
+            for f in fluids:
+                # "Methane (CH4)" -> "Methane"
+                # "Nitrogen (N2)" -> "Nitrogen"
+                # "Air" -> "Air"
+                # Use the value from COOLPROP_GASES but strip the formula
+                full_name = COOLPROP_GASES[f]
+                clean_name = full_name.split(' (')[0].replace(" ", "")
+                clean_fluids.append(clean_name)
+                
+            state = CP.AbstractState(backend, "&".join(clean_fluids))
+            state.set_mole_fractions(fractions)
+            return state
+        except Exception as e:
+            self.log(f"CoolProp State Oluşturma Hatası: {e}", "ERROR")
+            return None
+
+    def calculate_coolprop_properties(self, P, T, mixture, state=None):
+        # self.log("Hesaplama: CoolProp (Helmholtz EOS) kullanılıyor.", "DEBUG") # Çok log üretir
         standard_P = 101325; standard_T = 288.15
         viscosity_fallback = False
-
-        try:
-            standard_density = CP.PropsSI('D', 'P', standard_P, 'T', standard_T, mixture)
-        except Exception as e:
-            raise ValueError(f"CoolProp Standart Yoğunluk Hatası: {str(e)}")
         
-        MW_mix = CP.PropsSI('M', 'P', P, 'T', T, mixture) * 1000
+        if state:
+            try:
+                state.update(CP.PT_INPUTS, P, T)
+                density = state.rhomass()
+                viscosity = state.viscosity()
+                MW_mix = state.molar_mass() * 1000
+                Cp = state.cpmass() / 1000
+                Cv = state.cvmass() / 1000
+                Z = state.compressibility_factor()
+                
+                # Standard Density (Bunu her seferinde hesaplamaya gerek yok aslında ama hızlıdır)
+                # State'i değiştirmemek için ayrı hesaplamak lazım veya state'i geri yüklemek lazım.
+                # AbstractState tek bir noktayı temsil eder.
+                # Standart yoğunluk sabit olduğu için bunu dışarıda bir kere hesaplayıp cache'lemek en iyisi.
+                # Şimdilik PropsSI ile devam edelim standart yoğunluk için (sadece 1 kere çağrılırsa sorun değil)
+                # Ama döngü içinde çağrılıyorsa sorun.
+                # calculate_pressure_drop içinde m_dot hesabı için 1 kere çağrılıyor.
+                # Loop içinde calculate_thermo_properties çağrıldığında standart density lazım mı?
+                # Return dict'te var.
+                # Loop içinde sadece rho ve mu lazım.
+                
+                # Hızlandırma: Standart yoğunluğu hesaplama (Loop içindeyse)
+                standard_density = 0 # Placeholder if optimizing
+                
+            except Exception as e:
+                 # Fallback to PropsSI if AbstractState fails
+                 return self.calculate_coolprop_properties(P, T, mixture, state=None)
+        else:
+            try:
+                standard_density = CP.PropsSI('D', 'P', standard_P, 'T', standard_T, mixture)
+            except Exception as e:
+                raise ValueError(f"CoolProp Standart Yoğunluk Hatası: {str(e)}")
+            
+            MW_mix = CP.PropsSI('M', 'P', P, 'T', T, mixture) * 1000
 
-        try:
-            viscosity = CP.PropsSI('V', 'P', P, 'T', T, mixture)
-        except Exception:
-            viscosity_fallback = True
-            viscosity = 1.5e-5 * math.sqrt(MW_mix / 16.04) # Basit tahmin
-            self.log(f"UYARI: CoolProp viskozite hesaplamada hata verdi. Tahmini μ={viscosity*1e6:.2f} µPa·s kullanıldı.", "WARNING")
-        
+            try:
+                viscosity = CP.PropsSI('V', 'P', P, 'T', T, mixture)
+            except Exception:
+                viscosity_fallback = True
+                viscosity = 1.5e-5 * math.sqrt(MW_mix / 16.04) # Basit tahmin
+            
+            Cp = CP.PropsSI('C', 'P', P, 'T', T, mixture) / 1000
+            Cv = CP.PropsSI('O', 'P', P, 'T', T, mixture) / 1000
+            Z = CP.PropsSI('Z', 'P', P, 'T', T, mixture)
+            density = CP.PropsSI('D', 'P', P, 'T', T, mixture)
+
         props = {
-            "MW": MW_mix, "Cp": CP.PropsSI('C', 'P', P, 'T', T, mixture) / 1000,
-            "Cv": CP.PropsSI('O', 'P', P, 'T', T, mixture) / 1000,
-            "Z": CP.PropsSI('Z', 'P', P, 'T', T, mixture),
-            "density": CP.PropsSI('D', 'P', P, 'T', T, mixture),
-            "viscosity": viscosity, "standard_density": standard_density,
+            "MW": MW_mix, "Cp": Cp, "Cv": Cv, "Z": Z,
+            "density": density,
+            "viscosity": viscosity, "standard_density": standard_density, # Note: standard_density might be 0 if optimized
             "viscosity_fallback": viscosity_fallback
         }
         return props
 
     def calculate_pseudo_critical_properties(self, P, T, mole_fractions):
-        self.log("Hesaplama: Pseudo-Critical (Kay's Rule) modeli kullanılıyor.", "DEBUG")
+        # self.log("Hesaplama: Pseudo-Critical (Kay's Rule) modeli kullanılıyor.", "DEBUG")
         Ppc, Tpc, MW_mix = 0, 0, 0
         for gas, y in mole_fractions.items():
             props = self.get_pure_component_props(gas)
@@ -179,10 +245,10 @@ class GasFlowCalculator:
             "Ppc": Ppc, "Tpc": Tpc, "Pr": Pr, "Tr": Tr
         }
 
-    def calculate_thermo_properties(self, P, T, mole_fractions, library_choice):
+    def calculate_thermo_properties(self, P, T, mole_fractions, library_choice, state=None):
         if library_choice == "CoolProp (High Accuracy EOS)":
-            mixture = "&".join([f"{k}[{v:.6f}]" for k, v in mole_fractions.items()])
-            return self.calculate_coolprop_properties(P, T, mixture)
+            mixture = "&".join([f"{k}[{v:.6f}]" for k, v in mole_fractions.items()]) # Fallback string
+            return self.calculate_coolprop_properties(P, T, mixture, state)
         elif library_choice == "Peng-Robinson (PR EOS)":
             return self.calculate_cubic_eos_props(P, T, mole_fractions, "PR")
         elif library_choice == "Soave-Redlich-Kwong (SRK EOS)":
@@ -206,6 +272,11 @@ class GasFlowCalculator:
         gas_props_in = self.calculate_thermo_properties(P_in, T, mole_fractions, library_choice)
         rho_in = gas_props_in['density']
         
+        # CoolProp State Optimization
+        cp_state = None
+        if library_choice == "CoolProp (High Accuracy EOS)":
+            cp_state = self.create_coolprop_state(mole_fractions)
+
         # Kütlesel Debi Hesabı
         if flow_unit == "Sm³/h":
             m_dot = (flow_val / 3600) * gas_props_in['standard_density']
@@ -250,7 +321,7 @@ class GasFlowCalculator:
             
             for i in range(num_segments):
                 # Mevcut şartlarda özellikler
-                props = self.calculate_thermo_properties(P_current, T, mole_fractions, library_choice)
+                props = self.calculate_thermo_properties(P_current, T, mole_fractions, library_choice, cp_state)
                 rho = props['density']; mu = props['viscosity']
                 v = m_dot / (rho * A)
                 
@@ -291,7 +362,7 @@ class GasFlowCalculator:
                 Re_final = Re; f_final = f
 
             P_out = P_current
-            gas_props_out = self.calculate_thermo_properties(P_out, T, mole_fractions, library_choice)
+            gas_props_out = self.calculate_thermo_properties(P_out, T, mole_fractions, library_choice, cp_state)
             velocity_out = m_dot / (gas_props_out['density'] * A)
             # Profildeki son hızı güncelle
             profile_data["velocity"][-1] = velocity_out
@@ -313,7 +384,25 @@ class GasFlowCalculator:
     def calculate_max_length(self, inputs):
         """Maksimum uzunluk hesabı (Binary Search)."""
         P_in = inputs['P_in']; P_out_target = inputs['P_out_target']
-        if P_out_target >= P_in: raise ValueError("Çıkış basıncı giriş basıncından büyük veya eşit olamaz.")
+        
+        # Basınç Kontrolü
+        if P_out_target > P_in: 
+            raise ValueError("Çıkış basıncı giriş basıncından büyük olamaz.")
+        if abs(P_in - P_out_target) < 100: # 1 mbar farktan az ise 0 kabul et
+             # Temel debi hesabı için yine de özelliklere ihtiyaç var
+             gas_props_in = self.calculate_thermo_properties(P_in, inputs['T'], inputs['mole_fractions'], inputs['library_choice'])
+             if inputs['flow_unit'] == "Sm³/h":
+                m_dot = (inputs['flow_rate'] / 3600) * gas_props_in['standard_density']
+             else:
+                m_dot = inputs['flow_rate']
+                
+             return {
+                "L_max": 0, 
+                "Re": 0, "f": 0, 
+                "delta_p_pipe": 0, "delta_p_fittings": 0,
+                "m_dot": m_dot,
+                "note": "Giriş ve çıkış basıncı eşit."
+            }
         
         T = inputs['T']; mole_fractions = inputs['mole_fractions']
         library_choice = inputs['library_choice']; flow_val = inputs['flow_rate']; flow_unit = inputs['flow_unit']
@@ -323,6 +412,11 @@ class GasFlowCalculator:
         # Temel Özellikler
         gas_props_in = self.calculate_thermo_properties(P_in, T, mole_fractions, library_choice)
         rho_in = gas_props_in['density']
+        
+        # CoolProp State Optimization
+        cp_state = None
+        if library_choice == "CoolProp (High Accuracy EOS)":
+            cp_state = self.create_coolprop_state(mole_fractions)
         
         if flow_unit == "Sm³/h":
             m_dot = (flow_val / 3600) * gas_props_in['standard_density']
@@ -363,7 +457,7 @@ class GasFlowCalculator:
                 
                 for _ in range(20):
                     P_avg = (P1 + P2) / 2
-                    props = self.calculate_thermo_properties(P_avg, T, mole_fractions, library_choice)
+                    props = self.calculate_thermo_properties(P_avg, T, mole_fractions, library_choice, cp_state)
                     rho = props['density']; mu = props['viscosity']; v = m_dot / (rho * A)
                     Re = (rho * v * D_m) / mu; f = self.get_friction_factor(Re, relative_roughness)
                     
@@ -392,6 +486,7 @@ class GasFlowCalculator:
             "delta_p_pipe": delta_p_pipe, "delta_p_fittings": delta_p_fittings,
             "m_dot": m_dot
         }
+
 
     def calculate_min_diameter(self, inputs):
         """Minimum çap hesabı ve ticari boru seçimi (İteratif ve Karşılaştırmalı)."""

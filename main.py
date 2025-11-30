@@ -414,9 +414,79 @@ class GasFlowCalculatorApp:
                 ttk.Entry(fit_frame, textvariable=self.ball_valve_kv, width=5).grid(row=row, column=col+3)
 
     def create_log_tab_content(self, parent):
-        self.log_text = ScrolledText(parent, state="disabled", font=("Consolas", 9))
-        self.log_text.pack(fill="both", expand=True, padx=5, pady=5)
-        ttk.Button(parent, text="Logları Temizle", command=self.clear_logs).pack(anchor="e", padx=5, pady=5)
+        # Kontrol Paneli
+        ctrl_frame = ttk.Frame(parent)
+        ctrl_frame.pack(fill="x", padx=5, pady=5)
+        
+        ttk.Label(ctrl_frame, text="Filtre:").pack(side="left")
+        self.log_filter_var = tk.StringVar(value="Tümü")
+        filter_combo = ttk.Combobox(ctrl_frame, textvariable=self.log_filter_var, values=["Tümü", "INFO", "WARNING", "ERROR"], state="readonly", width=10)
+        filter_combo.pack(side="left", padx=5)
+        filter_combo.bind("<<ComboboxSelected>>", self.apply_log_filter)
+        
+        ttk.Button(ctrl_frame, text="Logları Temizle", command=self.clear_logs).pack(side="right")
+        
+        # Log Tablosu (Treeview)
+        cols = ("time", "level", "message")
+        self.log_tree = ttk.Treeview(parent, columns=cols, show="headings", selectmode="browse")
+        
+        self.log_tree.heading("time", text="Zaman")
+        self.log_tree.heading("level", text="Seviye")
+        self.log_tree.heading("message", text="Mesaj")
+        
+        self.log_tree.column("time", width=80, anchor="center")
+        self.log_tree.column("level", width=80, anchor="center")
+        self.log_tree.column("message", width=600, anchor="w")
+        
+        # Renkler (Tags)
+        self.log_tree.tag_configure("INFO", foreground="black")
+        self.log_tree.tag_configure("WARNING", foreground="#f57c00") # Turuncu
+        self.log_tree.tag_configure("ERROR", foreground="red")
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=self.log_tree.yview)
+        self.log_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.log_tree.pack(side="left", fill="both", expand=True, padx=(5,0), pady=5)
+        scrollbar.pack(side="right", fill="y", padx=5, pady=5)
+        
+        self.all_logs = [] # Tüm logları hafızada tut
+
+    def log_message(self, message, level="INFO"):
+        timestamp = time.strftime("%H:%M:%S")
+        # Kuyruğa yapısal veri ekle
+        self.log_queue.put({"time": timestamp, "level": level, "message": message})
+        self.root.after(100, self.process_log_queue)
+
+    def process_log_queue(self):
+        while not self.log_queue.empty():
+            entry = self.log_queue.get()
+            self.all_logs.append(entry)
+            
+            # Filtre kontrolü
+            current_filter = self.log_filter_var.get()
+            if current_filter == "Tümü" or entry["level"] == current_filter:
+                self.log_tree.insert("", "end", values=(entry["time"], entry["level"], entry["message"]), tags=(entry["level"],))
+                self.log_tree.yview_moveto(1) # Otomatik kaydır
+
+    def apply_log_filter(self, event=None):
+        # Tabloyu temizle
+        for item in self.log_tree.get_children():
+            self.log_tree.delete(item)
+            
+        current_filter = self.log_filter_var.get()
+        
+        # Yeniden doldur
+        for entry in self.all_logs:
+            if current_filter == "Tümü" or entry["level"] == current_filter:
+                self.log_tree.insert("", "end", values=(entry["time"], entry["level"], entry["message"]), tags=(entry["level"],))
+        
+        self.log_tree.yview_moveto(1)
+
+    def clear_logs(self):
+        self.all_logs.clear()
+        for item in self.log_tree.get_children():
+            self.log_tree.delete(item)
 
     def create_footer(self):
         footer = ttk.Frame(self.root)
@@ -473,24 +543,6 @@ class GasFlowCalculatorApp:
             # Sıkıştırılabilir akış ise Uzunluk da gerekli (Basınç düşümü ve hız artışı hesabı için)
             if self.flow_type.get() == "Sıkıştırılabilir":
                 self.lbl_len.grid(row=0, column=4, padx=(15, 5)); self.ent_len.grid(row=0, column=5)
-
-    def log_message(self, message, level="INFO"):
-        timestamp = time.strftime("%H:%M:%S")
-        self.log_queue.put(f"[{timestamp}] [{level}] {message}\n")
-        self.root.after(100, self.process_log_queue)
-
-    def process_log_queue(self):
-        while not self.log_queue.empty():
-            msg = self.log_queue.get()
-            self.log_text.config(state="normal")
-            self.log_text.insert("end", msg)
-            self.log_text.see("end")
-            self.log_text.config(state="disabled")
-
-    def clear_logs(self):
-        self.log_text.config(state="normal")
-        self.log_text.delete(1.0, "end")
-        self.log_text.config(state="disabled")
 
     def save_report(self):
         path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text Files", "*.txt")])
@@ -603,8 +655,51 @@ class GasFlowCalculatorApp:
         
         self.update_ui_visibility()
 
+    def validate_inputs(self):
+        """Kullanıcı girişlerini doğrular."""
+        errors = []
+        
+        # 1. Gaz Bileşimi
+        if not self.gas_components:
+            errors.append("Lütfen en az bir gaz bileşeni ekleyin.")
+        else:
+            total_mole = sum(var.get() for var in self.gas_components.values())
+            if total_mole <= 0:
+                errors.append("Toplam mol oranı 0'dan büyük olmalıdır.")
+        
+        # 2. Temel Parametreler
+        if self.p_in_var.get() <= 0: errors.append("Giriş basıncı pozitif olmalıdır.")
+        if self.t_var.get() <= -273.15: errors.append("Sıcaklık mutlak sıfırdan büyük olmalıdır.")
+        if self.flow_var.get() <= 0: errors.append("Akış debisi pozitif olmalıdır.")
+        
+        target = self.calc_target.get()
+        
+        # 3. Hedefe Özel Kontroller
+        if target == "Çıkış Basıncı":
+            if self.len_var.get() <= 0: errors.append("Boru uzunluğu pozitif olmalıdır.")
+            if self.diam_var.get() <= 0: errors.append("Boru çapı pozitif olmalıdır.")
+            if self.thick_var.get() >= self.diam_var.get() / 2: errors.append("Et kalınlığı yarıçaptan küçük olmalıdır.")
+            
+        elif target == "Maksimum Uzunluk":
+            if self.target_p_var.get() <= 0: errors.append("Hedef çıkış basıncı pozitif olmalıdır.")
+            if self.diam_var.get() <= 0: errors.append("Boru çapı pozitif olmalıdır.")
+            
+        elif target == "Minimum Çap":
+            if self.max_vel_var.get() <= 0: errors.append("Maksimum hız limiti pozitif olmalıdır.")
+            if self.p_design_var.get() <= 0: errors.append("Tasarım basıncı pozitif olmalıdır.")
+            if self.flow_type.get() == "Sıkıştırılabilir" and self.len_var.get() <= 0:
+                errors.append("Sıkıştırılabilir akış çap hesabı için boru uzunluğu gereklidir.")
+
+        if errors:
+            messagebox.showwarning("Giriş Hatası", "\n".join(errors))
+            return False
+        return True
+
     # --- HESAPLAMA BAŞLATMA ---
     def start_calculation(self):
+        # 0. Validasyon
+        if not self.validate_inputs(): return
+
         # 1. Verileri Topla
         try:
             inputs = self.collect_inputs()
@@ -671,23 +766,29 @@ class GasFlowCalculatorApp:
             "total_k": total_k,
             "flow_property": self.flow_type.get(),
             "target": self.calc_target.get(),
-            "P_out_target": self.convert_pressure_to_pa(self.target_p_var.get(), self.target_p_unit.get()) if self.calc_target.get() == "Maksimum Uzunluk" else 0,
+            "P_out_target": self.convert_pressure_to_pa(self.target_p_var.get(), self.target_p_unit.get(), output_type="absolute") if self.calc_target.get() == "Maksimum Uzunluk" else 0,
             
             # Min Çap İçin Ekler
             "max_velocity": self.max_vel_var.get(),
-            "P_design": self.convert_pressure_to_pa(self.p_design_var.get(), self.p_design_unit.get()), # Gauge Pa'ya çevrilmeli
+            "P_design": self.convert_pressure_to_pa(self.p_design_var.get(), self.p_design_unit.get(), output_type="gauge"), # Barlow için Gauge
             "material": self.material_combo.get(),
             "F": self.factor_f.get(), "E": self.factor_e.get(), "T_factor": self.factor_t.get()
         }
 
-    def convert_pressure_to_pa(self, val, unit):
-        # Basit çevirici (Gauge Pa döndürür - Tasarım basıncı genelde Gauge verilir)
-        # Eğer Bara/Psia gelirse atm çıkarılır.
-        if unit == "Barg": return val * 1e5
-        elif unit == "Bara": return max(0, val * 1e5 - 101325)
-        elif unit == "Psig": return val * 6894.76
-        elif unit == "Psia": return max(0, val * 6894.76 - 101325)
-        return val
+    def convert_pressure_to_pa(self, val, unit, output_type="absolute"):
+        # output_type: "absolute" veya "gauge"
+        
+        # Önce Mutlak (Absolute) Pa'ya çevir
+        abs_pa = 0
+        if unit == "Barg": abs_pa = (val + 1.01325) * 1e5
+        elif unit == "Bara": abs_pa = val * 1e5
+        elif unit == "Psig": abs_pa = (val + 14.696) * 6894.76
+        elif unit == "Psia": abs_pa = val * 6894.76
+        
+        if output_type == "absolute":
+            return abs_pa
+        else: # gauge
+            return max(0, abs_pa - 101325)
 
     def run_calculation_thread(self, inputs):
         try:
