@@ -1,7 +1,7 @@
 {
   "repo": "SLedgehammer-dev12/Programlar",
   "update_mode": "branch",
-  "branch": "Gas-Flow-Calc",
+  "branch": "main",
   "version_source_path": "Çalışan programlar/Güncelleme/Gas Flow Calc V5/main.py",
   "version_regex": "APP_VERSION\\s*=\\s*\"(\\d+\\.\\d+\\.\\d+)\"",
   "app_subdir_in_zip": "Çalışan programlar/Güncelleme/Gas Flow Calc V5",
