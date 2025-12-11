@@ -1,6 +1,19 @@
 __pycache__/
 *.pyc
+*.py[cod]
 *.log
 .vscode/
 .idea/
 *.db
+
+# Test files
+test_*.py
+deneme*.json
+
+# Backups
+*_backup_*/
+_backups/
+
+# OS
+.DS_Store
+Thumbs.db

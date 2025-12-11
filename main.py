@@ -6,10 +6,16 @@ import threading
 import queue
 import time
 import math
+import os
+import webbrowser
 
 # Modüler importlar
 from data import COOLPROP_GASES, PIPE_MATERIALS, PIPE_ROUGHNESS, FITTING_K_FACTORS
 from calculations import GasFlowCalculator
+from updater import Updater
+
+# Uygulama sürümü (semantic versioning)
+APP_VERSION = "5.0.0"
 
 class ToolTip(object):
     def __init__(self, widget, text='widget info'):
@@ -70,6 +76,9 @@ class GasFlowCalculatorApp:
         # Hesaplama Motoru
         self.calculator = GasFlowCalculator()
         self.calculator.set_log_callback(self.log_message)
+        # Güncelleme yöneticisi
+        self.updater = Updater(self.log_message)
+        self.last_download_path = None
 
         # Değişkenler
         self.gas_components = {}
@@ -87,6 +96,9 @@ class GasFlowCalculatorApp:
         self.create_main_layout()
         
         self.log_message("PROGRAM BAŞLATILDI: Versiyon 5 (Refactored)")
+        self.log_message(f"Uygulama sürümü: {APP_VERSION}")
+        # Arka planda sessiz güncelleme kontrolü
+        self.root.after(500, self.silent_update_check)
 
     def create_menu(self):
         menubar = Menu(self.root)
@@ -98,6 +110,14 @@ class GasFlowCalculatorApp:
         file_menu.add_command(label="Proje Aç (JSON)", command=self.load_project)
         file_menu.add_separator()
         file_menu.add_command(label="Çıkış", command=self.root.quit)
+        
+        update_menu = Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Güncelleme", menu=update_menu)
+        update_menu.add_command(label="Güncellemeleri Kontrol Et", command=self.check_updates)
+        update_menu.add_command(label="Son Sürümü İndir", command=self.download_latest_release)
+        update_menu.add_separator()
+        update_menu.add_command(label="Zip'ten Güncellemeyi Uygula...", command=self.apply_update_from_zip_file)
+        update_menu.add_command(label="Güncelleme Yapılandırması...", command=self.open_update_config)
 
     def setup_styles(self):
         style = ttk.Style()
@@ -1106,6 +1126,84 @@ class GasFlowCalculatorApp:
         canvas = FigureCanvasTkAgg(fig, master=graph_win)
         canvas.draw()
         canvas.get_tk_widget().pack(fill="both", expand=True)
+
+    # --- Güncelleme İşlevleri ---
+    def silent_update_check(self):
+        try:
+            update_info = self.updater.check_for_update(current_version=APP_VERSION)
+            if update_info and update_info.get("has_update"):
+                self.log_message(f"Yeni sürüm bulundu: {update_info['latest_version']}")
+        except Exception as e:
+            self.log_message(f"Sessiz güncelleme kontrolü başarısız: {e}", level="WARNING")
+
+    def check_updates(self):
+        try:
+            self.log_message("Güncellemeler kontrol ediliyor...")
+            info = self.updater.check_for_update(current_version=APP_VERSION)
+            if not info:
+                messagebox.showinfo("Güncelleme", "Güncelleme yapılandırması eksik veya bağlantı hatası.")
+                return
+            if info["has_update"]:
+                body = info.get('body', '')
+                preview = (body[:500] + ('...' if len(body) > 500 else '')) if body else 'N/A'
+                msg = (
+                    f"Yeni sürüm bulundu: {info['latest_version']}\n\n"
+                    f"Değişiklikler: {preview}\n\n"
+                    "İndirmek ister misiniz?"
+                )
+                if messagebox.askyesno("Güncelleme Mevcut", msg):
+                    self.download_latest_release()
+            else:
+                messagebox.showinfo("Güncelleme", "Uygulamanız güncel.")
+        except Exception as e:
+            messagebox.showerror("Güncelleme Hatası", str(e))
+
+    def download_latest_release(self):
+        try:
+            self.log_message("Son sürüm indiriliyor...")
+            asset_path = self.updater.download_latest_asset()
+            if asset_path:
+                self.last_download_path = asset_path
+                if messagebox.askyesno("İndirme Tamamlandı", f"Dosya indirildi: {asset_path}\n\nŞimdi güncellemeyi uygulamak ister misiniz? (Uygulama klasörü yedeklenir)"):
+                    self.apply_update(asset_path)
+                else:
+                    messagebox.showinfo("Bilgi", "Daha sonra 'Zip'ten Güncellemeyi Uygula...' menüsünden uygulayabilirsiniz.")
+                try:
+                    os.startfile(os.path.dirname(asset_path))
+                except Exception:
+                    webbrowser.open(os.path.dirname(asset_path))
+            else:
+                messagebox.showinfo("Bilgi", "İndirilebilir bir varlık bulunamadı.")
+        except Exception as e:
+            messagebox.showerror("İndirme Hatası", str(e))
+
+    def open_update_config(self):
+        try:
+            cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+            if os.path.exists(cfg_path):
+                os.startfile(cfg_path)
+            else:
+                messagebox.showinfo("Bilgi", f"Yapılandırma dosyası bulunamadı: {cfg_path}")
+        except Exception as e:
+            messagebox.showerror("Açma Hatası", str(e))
+
+    def apply_update_from_zip_file(self):
+        path = filedialog.askopenfilename(filetypes=[("Zip Files", "*.zip")])
+        if not path:
+            return
+        self.apply_update(path)
+
+    def apply_update(self, zip_path: str):
+        try:
+            target_dir = os.path.dirname(__file__)
+            info = self.updater.apply_update_from_zip(zip_path, target_dir)
+            backup = info.get("backup_dir") if info else None
+            msg = "Güncelleme uygulandı. Uygulamayı yeniden başlatmanız önerilir."
+            if backup:
+                msg += f"\nYedek klasör: {backup}"
+            messagebox.showinfo("Güncelleme", msg)
+        except Exception as e:
+            messagebox.showerror("Güncelleme Hatası", str(e))
 
 if __name__ == "__main__":
     root = tk.Tk()
