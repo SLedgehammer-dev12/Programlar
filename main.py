@@ -15,7 +15,7 @@ from calculations import GasFlowCalculator
 from updater import Updater
 
 # Uygulama sürümü (semantic versioning)
-APP_VERSION = "5.0.0"
+APP_VERSION = "5.1.0"
 
 class ToolTip(object):
     def __init__(self, widget, text='widget info'):
