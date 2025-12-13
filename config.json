@@ -5,6 +5,13 @@
   "version_source_path": "main.py",
   "version_regex": "APP_VERSION\\s*=\\s*\"(\\d+\\.\\d+\\.\\d+)\"",
   "app_subdir_in_zip": "",
-  "exclude_on_apply": ["config.json", "__pycache__", ".git", "_backups", "dene.json"],
-  "asset_name_regex": "(gas[-_ ]?flow[-_ ]?calc).*\\.zip"
+  "exclude_on_apply": [
+    "config.json",
+    "__pycache__",
+    ".git",
+    "_backups",
+    "dene.json"
+  ],
+  "asset_name_regex": "(gas[-_ ]?flow[-_ ]?calc).*\\.zip",
+  "language": "en"
 }
