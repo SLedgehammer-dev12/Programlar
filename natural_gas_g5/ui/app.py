@@ -135,13 +135,29 @@ class ThermoApp(tk.Tk):
         self.input_panel = InputPanel(input_frame, self.gas_list)
         self.input_panel.pack(fill=tk.BOTH, expand=True)
         
-        # Calculate button
-        self.calc_button = ttk.Button(
-            input_frame,
+        # Calculate button frame with progress
+        calc_frame = ttk.Frame(input_frame)
+        calc_frame.pack(pady=15, fill=tk.X)
+        
+        self.calc_button = tk.Button(
+            calc_frame,
             text="Hesapla",
-            command=self._on_calculate
+            command=self._on_calculate,
+            bg="#4CAF50",
+            fg="white",
+            activebackground="#45a049",
+            font=("Segoe UI", 10, "bold"),
+            relief=tk.RAISED,
+            cursor="hand2"
         )
-        self.calc_button.pack(pady=15, fill=tk.X, ipady=5)
+        self.calc_button.pack(fill=tk.X, ipady=8)
+        
+        # Progress bar inside button frame
+        self.calc_progress = ttk.Progressbar(
+            calc_frame,
+            mode='indeterminate',
+            length=200
+        )
         
         # Output panel (right side)
         output_frame = ttk.Frame(main_content, padding="10")
@@ -219,8 +235,10 @@ class ThermoApp(tk.Tk):
             
             # Show progress
             self.status_var.set("Hesaplanıyor...")
-            self.config(cursor="watch") # Changed self.root to self
-            self.calc_button.state(['disabled'])
+            self.config(cursor="watch")
+            self.calc_button.config(state=tk.DISABLED, bg="#FFA500", text="Hesaplanıyor...")
+            self.calc_progress.pack(fill=tk.X, pady=(5, 0))
+            self.calc_progress.start(10)
             
             # Run in thread
             thread = threading.Thread(
@@ -312,8 +330,13 @@ class ThermoApp(tk.Tk):
             self.status_var.set("Hesaplama tamamlandı.")
         
         # Re-enable UI
-        self.calc_button.state(['!disabled'])
+        self.calc_progress.stop()
+        self.calc_progress.pack_forget()
+        self.calc_button.config(state=tk.NORMAL, bg="#4CAF50", text="Hesapla")
         self.config(cursor="")
+        
+        # Success notification
+        messagebox.showinfo("Hesaplama Tamamlandı", "Sonuçlar başarıyla hesaplandı!")
     
     def _on_calculation_error(self, error: Exception):
         """
@@ -323,11 +346,11 @@ class ThermoApp(tk.Tk):
             error: Exception that occurred
         """
         # Stop progress
-        self.progress_bar.stop()
-        self.progress_bar.pack_forget()
+        self.calc_progress.stop()
+        self.calc_progress.pack_forget()
         
         # Re-enable UI
-        self.calc_button.state(['!disabled'])
+        self.calc_button.config(state=tk.NORMAL, bg="#F44336", text="Hata! Tekrar Dene")
         self.config(cursor="")
         
         # Get log lines
