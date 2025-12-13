@@ -66,6 +66,275 @@ class ToolTip(object):
         if tw:
             tw.destroy()
 
+# --- DOĞRULAMA SINIFI (Canlı Kontrol) ---
+class ValidationHelper:
+    """Kullanıcı girişleri için canlı doğrulama yardımcısı."""
+    
+    # Hata stilleri
+    ERROR_BG = "#ffe6e6"      # Hafif kırmızı arka plan
+    ERROR_FG = "#c62828"      # Koyu kırmızı metin
+    NORMAL_BG = "white"
+    NORMAL_FG = "black"
+    WARNING_BG = "#fff3e0"    # Hafif turuncu
+    
+    @staticmethod
+    def normalize_number(value_str):
+        """
+        Virgül ve nokta ile girilen sayıları normalize eder.
+        Örnek: "1,5" veya "1.5" -> 1.5
+        Türk lokali desteği: virgül ondalık ayracı olarak kabul edilir.
+        """
+        if not value_str:
+            return ""
+        
+        # String'e çevir (StringVar olabilir)
+        s = str(value_str).strip()
+        
+        # Boş kontrol
+        if not s:
+            return ""
+        
+        # Virgül -> Nokta dönüşümü
+        # Önce durumu analiz et:
+        # 1. "1.234,56" formatı (Türk/Avrupa) -> 1234.56
+        # 2. "1,234.56" formatı (ABD) -> 1234.56
+        # 3. Sadece virgül veya nokta varsa -> doğrudan dönüşüm
+        
+        comma_count = s.count(',')
+        dot_count = s.count('.')
+        
+        if comma_count > 0 and dot_count > 0:
+            # İkisi de var - hangisi ondalık ayracı?
+            last_comma = s.rfind(',')
+            last_dot = s.rfind('.')
+            
+            if last_comma > last_dot:
+                # Virgül sonda: Türk/Avrupa formatı (1.234,56)
+                s = s.replace('.', '')  # Binlik noktaları kaldır
+                s = s.replace(',', '.')  # Virgül -> Nokta
+            else:
+                # Nokta sonda: ABD formatı (1,234.56)
+                s = s.replace(',', '')  # Binlik virgülleri kaldır
+        elif comma_count > 0:
+            # Sadece virgül var
+            if comma_count == 1:
+                # Tek virgül = ondalık ayracı
+                s = s.replace(',', '.')
+            else:
+                # Birden fazla virgül = binlik ayracı
+                s = s.replace(',', '')
+        # Nokta sadece varsa zaten doğru formatta
+        
+        return s
+    
+    @staticmethod
+    def parse_float(value_str, default=0.0):
+        """Normalize edilmiş string'i float'a çevirir."""
+        try:
+            normalized = ValidationHelper.normalize_number(value_str)
+            if not normalized:
+                return default
+            return float(normalized)
+        except ValueError:
+            return None  # Geçersiz değer
+    
+    @staticmethod
+    def parse_int(value_str, default=0):
+        """Normalize edilmiş string'i int'e çevirir."""
+        try:
+            normalized = ValidationHelper.normalize_number(value_str)
+            if not normalized:
+                return default
+            return int(float(normalized))
+        except ValueError:
+            return None
+
+
+class ValidatedEntry(ttk.Entry):
+    """
+    Canlı doğrulama yapan Entry widget'ı.
+    - Virgül ve nokta desteği
+    - Gerçek zamanlı hata gösterimi
+    - Hata tooltip'i
+    """
+    
+    def __init__(self, master, textvariable=None, validation_type="float", 
+                 min_value=None, max_value=None, allow_zero=True, allow_negative=False,
+                 error_callback=None, **kwargs):
+        super().__init__(master, textvariable=textvariable, **kwargs)
+        
+        self.validation_type = validation_type  # "float", "int", "positive_float", "percentage"
+        self.min_value = min_value
+        self.max_value = max_value
+        self.allow_zero = allow_zero
+        self.allow_negative = allow_negative
+        self.error_callback = error_callback
+        
+        self.error_tooltip = None
+        self.error_message = ""
+        self.is_valid = True
+        
+        # Orijinal arka plan rengini sakla
+        self._original_bg = self.cget('background') if self.cget('background') else 'white'
+        
+        # Event bağlamaları
+        self.bind('<KeyRelease>', self._on_key_release)
+        self.bind('<FocusOut>', self._on_focus_out)
+        self.bind('<FocusIn>', self._on_focus_in)
+        self.bind('<Leave>', self._hide_error_tooltip)
+        
+    def _on_key_release(self, event=None):
+        """Tuş bırakıldığında doğrulama yap."""
+        self._validate_input()
+        
+    def _on_focus_out(self, event=None):
+        """Fokus çıkışında değeri normalize et ve doğrula."""
+        self._normalize_and_validate()
+        self._hide_error_tooltip()
+        
+    def _on_focus_in(self, event=None):
+        """Fokus girişinde hata varsa tooltip göster."""
+        if not self.is_valid:
+            self._show_error_tooltip()
+    
+    def _normalize_and_validate(self):
+        """Değeri normalize et ve tekrar doğrula."""
+        current = self.get()
+        normalized = ValidationHelper.normalize_number(current)
+        
+        # Eğer değer değiştiyse ve geçerliyse, girişi güncelle
+        if normalized != current:
+            try:
+                float(normalized)  # Geçerli mi kontrol et
+                # Entry içeriğini güncelle
+                state = self.cget('state')
+                self.config(state='normal')
+                self.delete(0, tk.END)
+                self.insert(0, normalized)
+                self.config(state=state)
+            except ValueError:
+                pass
+        
+        self._validate_input()
+    
+    def _validate_input(self):
+        """Girişi doğrula ve görsel feedback ver."""
+        value_str = self.get()
+        self.error_message = ""
+        self.is_valid = True
+        
+        # Boş değer kontrolü
+        if not value_str.strip():
+            self._set_normal_style()
+            return True
+        
+        # Sayıya çevirmeyi dene
+        normalized = ValidationHelper.normalize_number(value_str)
+        
+        try:
+            if self.validation_type == "int":
+                value = int(float(normalized))
+            else:
+                value = float(normalized)
+        except ValueError:
+            self.error_message = "Geçersiz sayı formatı"
+            self.is_valid = False
+            self._set_error_style()
+            return False
+        
+        # Min/Max kontrolleri
+        if self.min_value is not None and value < self.min_value:
+            self.error_message = f"Değer en az {self.min_value} olmalıdır"
+            self.is_valid = False
+            self._set_error_style()
+            return False
+            
+        if self.max_value is not None and value > self.max_value:
+            self.error_message = f"Değer en fazla {self.max_value} olabilir"
+            self.is_valid = False
+            self._set_error_style()
+            return False
+        
+        # Sıfır kontrolü
+        if not self.allow_zero and value == 0:
+            self.error_message = "Değer sıfır olamaz"
+            self.is_valid = False
+            self._set_error_style()
+            return False
+        
+        # Negatif kontrolü
+        if not self.allow_negative and value < 0:
+            self.error_message = "Değer negatif olamaz"
+            self.is_valid = False
+            self._set_error_style()
+            return False
+        
+        # Yüzde kontrolü
+        if self.validation_type == "percentage":
+            if value < 0 or value > 100:
+                self.error_message = "Yüzde 0-100 arasında olmalıdır"
+                self.is_valid = False
+                self._set_error_style()
+                return False
+        
+        # Geçerli
+        self._set_normal_style()
+        return True
+    
+    def _set_error_style(self):
+        """Hata stilini uygula."""
+        self.config(background=ValidationHelper.ERROR_BG, foreground=ValidationHelper.ERROR_FG)
+        self._show_error_tooltip()
+        if self.error_callback:
+            self.error_callback(self, self.error_message)
+    
+    def _set_normal_style(self):
+        """Normal stili geri yükle."""
+        self.config(background=ValidationHelper.NORMAL_BG, foreground=ValidationHelper.NORMAL_FG)
+        self._hide_error_tooltip()
+        if self.error_callback:
+            self.error_callback(self, None)
+    
+    def _show_error_tooltip(self, event=None):
+        """Hata tooltip'ini göster."""
+        if not self.error_message:
+            return
+            
+        if self.error_tooltip:
+            return  # Zaten gösteriliyor
+        
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height() + 2
+        
+        self.error_tooltip = tk.Toplevel(self)
+        self.error_tooltip.wm_overrideredirect(True)
+        self.error_tooltip.wm_geometry(f"+{x}+{y}")
+        
+        label = tk.Label(
+            self.error_tooltip, 
+            text=f"⚠ {self.error_message}",
+            background="#ffcdd2",  # Açık kırmızı
+            foreground="#b71c1c",  # Koyu kırmızı
+            font=("Segoe UI", 9),
+            padx=8, pady=4,
+            relief="solid",
+            borderwidth=1
+        )
+        label.pack()
+    
+    def _hide_error_tooltip(self, event=None):
+        """Hata tooltip'ini gizle."""
+        if self.error_tooltip:
+            self.error_tooltip.destroy()
+            self.error_tooltip = None
+    
+    def get_value(self, default=0.0):
+        """Normalize edilmiş değeri döndür."""
+        if self.validation_type == "int":
+            return ValidationHelper.parse_int(self.get(), default=int(default))
+        return ValidationHelper.parse_float(self.get(), default=default)
+
+
 class GasFlowCalculatorApp:
     def __init__(self, root):
         self.root = root
@@ -87,6 +356,11 @@ class GasFlowCalculatorApp:
         self.ball_valve_cv = tk.DoubleVar(value=0.0)
         self.log_queue = queue.Queue()
         self.calc_queue = queue.Queue()
+        
+        # Şema durumu değişkenleri
+        self.schematic_state = "pending"  # "pending", "calculating", "completed", "error"
+        self.last_calculation_time = None
+        self.last_result = None
 
         # Stil
         self.setup_styles()
@@ -94,6 +368,12 @@ class GasFlowCalculatorApp:
         # Arayüz Kurulumu
         self.create_menu()
         self.create_main_layout()
+        
+        # Şema otomatik güncelleme binding'leri
+        self._setup_schematic_bindings()
+        
+        # İlk UI görünürlük ayarı
+        self.update_ui_visibility()
         
         self.log_message("PROGRAM BAŞLATILDI: Versiyon 5 (Refactored)")
         self.log_message(f"Uygulama sürümü: {APP_VERSION}")
@@ -146,13 +426,17 @@ class GasFlowCalculatorApp:
         self.root.configure(bg=bg_color)
 
     def validate_float(self, event):
+        """Eski stil doğrulama - geriye uyumluluk için korundu."""
         widget = event.widget
         try:
-            val = float(widget.get())
+            # Virgül desteği ekle
+            value_str = widget.get()
+            normalized = ValidationHelper.normalize_number(value_str)
+            val = float(normalized)
             if val < 0: raise ValueError
             widget.config(bg="white")
         except ValueError:
-            widget.config(bg="#ffe6e6") # Hata durumunda hafif kırmızı
+            widget.config(bg="#ffe6e6")  # Hata durumunda hafif kırmızı
 
     def create_main_layout(self):
         # Ana Notebook (Sekmeler)
@@ -172,8 +456,30 @@ class GasFlowCalculatorApp:
         # Alt Bilgi / Butonlar
         self.create_footer()
         
-        # Validasyon Bağlamaları
+        # Validasyon Bağlamaları (ValidatedEntry için otomatik, diğerleri için eski stil)
+        # Not: ValidatedEntry kendi bağlamalarını yapar
         self.root.bind_class("TEntry", "<FocusOut>", self.validate_float)
+        self.root.bind_class("TEntry", "<KeyRelease>", self._on_entry_key_release)
+    
+    def _on_entry_key_release(self, event):
+        """Tuş bırakıldığında hızlı doğrulama."""
+        widget = event.widget
+        if isinstance(widget, ValidatedEntry):
+            return  # ValidatedEntry kendi doğrulamasını yapar
+        
+        try:
+            value_str = widget.get()
+            if not value_str.strip():
+                widget.config(bg="white")
+                return
+            normalized = ValidationHelper.normalize_number(value_str)
+            val = float(normalized)
+            if val < 0:
+                widget.config(bg="#ffe6e6")
+            else:
+                widget.config(bg="white")
+        except ValueError:
+            widget.config(bg="#ffe6e6")
 
     def create_calc_tab_content(self, parent):
         # PanedWindow (Ayırıcı)
@@ -239,13 +545,136 @@ class GasFlowCalculatorApp:
         btn_frame = ttk.Frame(right_panel)
         btn_frame.pack(fill="x", pady=10)
         
-        self.calc_button = tk.Button(btn_frame, text="HESAPLA", bg="#28a745", fg="white", font=("Segoe UI", 11, "bold"), height=2, command=self.start_calculation)
-        self.calc_button.pack(fill="x")
+        # Progress Button Container
+        self.progress_container = tk.Frame(btn_frame, bg="#e0e0e0", height=50)
+        self.progress_container.pack(fill="x")
+        self.progress_container.pack_propagate(False)
+        
+        # Progress Bar (Canvas tabanlı)
+        self.progress_canvas = tk.Canvas(self.progress_container, height=50, bg="#28a745", 
+                                          highlightthickness=0)
+        self.progress_canvas.pack(fill="both", expand=True)
+        
+        # Progress değişkenleri
+        self.progress_value = 0
+        self.progress_text_id = None
+        self.progress_bar_id = None
+        self.is_calculating = False
+        
+        # İlk durumu çiz
+        self._draw_progress_button("HESAPLA", 0, idle=True)
+        
+        # Tıklama olayı
+        self.progress_canvas.bind("<Button-1>", lambda e: self.start_calculation())
+        self.progress_canvas.bind("<Enter>", self._on_progress_hover)
+        self.progress_canvas.bind("<Leave>", self._on_progress_leave)
         
         self.btn_show_graphs = ttk.Button(btn_frame, text="Grafikleri Göster", command=self.show_graphs, state="disabled")
         self.btn_show_graphs.pack(fill="x", pady=5)
         
         ttk.Button(btn_frame, text="Raporu Kaydet", command=self.save_report).pack(fill="x", pady=5)
+    
+    def _draw_progress_button(self, text, progress, idle=False):
+        """Progress button'u çiz."""
+        canvas = self.progress_canvas
+        canvas.delete("all")
+        
+        width = canvas.winfo_width() or 400
+        height = canvas.winfo_height() or 50
+        
+        if idle:
+            # Bekleme durumu - düz yeşil
+            canvas.create_rectangle(0, 0, width, height, fill="#28a745", outline="")
+            canvas.create_text(width/2, height/2, text=text, 
+                             font=("Segoe UI", 12, "bold"), fill="white")
+        else:
+            # İlerleme durumu - gri arka plan + yeşil ilerleme
+            # Arka plan (gri)
+            canvas.create_rectangle(0, 0, width, height, fill="#6c757d", outline="")
+            
+            # İlerleme çubuğu (yeşil)
+            progress_width = (progress / 100) * width
+            if progress_width > 0:
+                canvas.create_rectangle(0, 0, progress_width, height, fill="#28a745", outline="")
+            
+            # Metin
+            canvas.create_text(width/2, height/2, text=text, 
+                             font=("Segoe UI", 12, "bold"), fill="white")
+    
+    def _on_progress_hover(self, event):
+        """Mouse hover efekti."""
+        if not self.is_calculating:
+            self.progress_canvas.config(cursor="hand2")
+            self._draw_progress_button("HESAPLA", 0, idle=True)
+            # Hafif parlama efekti
+            self.progress_canvas.itemconfig("all", fill="")
+            width = self.progress_canvas.winfo_width() or 400
+            height = self.progress_canvas.winfo_height() or 50
+            self.progress_canvas.delete("all")
+            self.progress_canvas.create_rectangle(0, 0, width, height, fill="#2dbe50", outline="")
+            self.progress_canvas.create_text(width/2, height/2, text="HESAPLA", 
+                                            font=("Segoe UI", 12, "bold"), fill="white")
+    
+    def _on_progress_leave(self, event):
+        """Mouse leave efekti."""
+        if not self.is_calculating:
+            self._draw_progress_button("HESAPLA", 0, idle=True)
+    
+    def update_progress(self, value, status_text=None):
+        """İlerleme durumunu güncelle."""
+        self.progress_value = min(100, max(0, value))
+        text = status_text or f"Hesaplanıyor... %{int(self.progress_value)}"
+        self._draw_progress_button(text, self.progress_value, idle=False)
+        self.progress_canvas.update_idletasks()
+    
+    def reset_progress_button(self):
+        """Progress button'u başlangıç durumuna getir."""
+        self.is_calculating = False
+        self.progress_value = 0
+        self._draw_progress_button("HESAPLA", 0, idle=True)
+        self.progress_canvas.config(cursor="hand2")
+    
+    def _setup_schematic_bindings(self):
+        """Şema otomatik güncelleme için binding'leri kur."""
+        # Hesaplama hedefi değiştiğinde şemayı güncelle
+        self.calc_target.bind("<<ComboboxSelected>>", self._on_target_or_input_change)
+        
+        # Akış tipi değiştiğinde şemayı güncelle
+        self.flow_type.bind("<<ComboboxSelected>>", self._on_target_or_input_change)
+        
+        # Basınç/Sıcaklık/Debi değişkenleri için trace
+        self.p_in_var.trace_add("write", self._schedule_schematic_update)
+        self.t_var.trace_add("write", self._schedule_schematic_update)
+        self.flow_var.trace_add("write", self._schedule_schematic_update)
+        self.len_var.trace_add("write", self._schedule_schematic_update)
+        self.diam_var.trace_add("write", self._schedule_schematic_update)
+        self.thick_var.trace_add("write", self._schedule_schematic_update)
+        self.target_p_var.trace_add("write", self._schedule_schematic_update)
+        self.max_vel_var.trace_add("write", self._schedule_schematic_update)
+        
+        # Debounce için timer ID
+        self._schematic_update_timer = None
+    
+    def _on_target_or_input_change(self, event=None):
+        """Hedef veya önemli girdi değiştiğinde."""
+        # Hesaplama sonuçlarını temizle (yeni hedef seçildi)
+        if event and event.widget == self.calc_target:
+            self.schematic_state = "pending"
+            self.last_result = None
+            # UI görünürlüğünü güncelle (hedef değişti)
+            self.update_ui_visibility()
+        self.refresh_schematic()
+    
+    def _schedule_schematic_update(self, *args):
+        """Şema güncellemesini 300ms gecikmeyle planla (debounce)."""
+        if self._schematic_update_timer:
+            self.root.after_cancel(self._schematic_update_timer)
+        self._schematic_update_timer = self.root.after(300, self.refresh_schematic)
+    
+    def refresh_schematic(self):
+        """Şemayı yeniden çiz."""
+        if hasattr(self, 'schematic_canvas'):
+            self.draw_schematic()
 
     def create_gas_section(self, parent):
         frame = ttk.LabelFrame(parent, text="1. Gaz Karışımı", style="Bold.TLabelframe", padding=10)
@@ -282,13 +711,24 @@ class GasFlowCalculatorApp:
         self.gas_list_canvas.pack(side="left", fill="x", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Bileşim Türü
+        # Bileşim Türü ve Toplam Göstergesi
         type_frame = ttk.Frame(frame)
         type_frame.pack(fill="x", pady=(5,0))
         ttk.Label(type_frame, text="Bileşim Türü:").pack(side="left")
         self.comp_type = ttk.Combobox(type_frame, values=["Mol %", "Kütle %"], width=10, state="readonly")
         self.comp_type.set("Mol %")
         self.comp_type.pack(side="left", padx=5)
+        
+        # Toplam Göstergesi
+        ttk.Label(type_frame, text="   │   Toplam:").pack(side="left", padx=(20, 5))
+        self.gas_total_label = tk.Label(type_frame, text="0.00 %", font=("Segoe UI", 10, "bold"), 
+                                         bg="#f4f6f9", fg="#666")
+        self.gas_total_label.pack(side="left")
+        
+        # Durum İkonu
+        self.gas_status_label = tk.Label(type_frame, text="", font=("Segoe UI", 10), 
+                                          bg="#f4f6f9", fg="#666")
+        self.gas_status_label.pack(side="left", padx=5)
 
     def create_process_section(self, parent):
         frame = ttk.LabelFrame(parent, text="2. Proses Şartları", style="Bold.TLabelframe", padding=10)
@@ -529,18 +969,116 @@ class GasFlowCalculatorApp:
         gas_id = next(k for k, v in COOLPROP_GASES.items() if v == gas_name)
         if gas_id in self.gas_components: return
         
-        var = tk.DoubleVar(value=0)
+        # StringVar kullan (virgül desteği için)
+        var = tk.StringVar(value="0")
         self.gas_components[gas_id] = var
         
         row_frame = ttk.Frame(self.gas_list_inner)
         row_frame.pack(fill="x", pady=2)
         ttk.Label(row_frame, text=gas_name, width=25).pack(side="left")
-        ttk.Entry(row_frame, textvariable=var, width=8).pack(side="left", padx=5)
+        
+        # Entry - StringVar ile bağlı
+        entry = ttk.Entry(row_frame, textvariable=var, width=8)
+        entry.pack(side="left", padx=5)
+        
+        # Her tuş vuruşunda ve değer değiştiğinde toplamı güncelle
+        entry.bind("<KeyRelease>", lambda e: self.update_gas_total())
+        var.trace_add("write", lambda *args: self.update_gas_total())
+        
         ttk.Button(row_frame, text="X", width=3, command=lambda: self.remove_gas(gas_id, row_frame)).pack(side="left")
+        
+        self.update_gas_total()
 
     def remove_gas(self, gas_id, widget):
         del self.gas_components[gas_id]
         widget.destroy()
+        self.update_gas_total()
+    
+    def update_gas_total(self, *args):
+        """Gaz bileşimi toplamını hesapla ve göster."""
+        total = 0.0
+        for var in self.gas_components.values():
+            try:
+                # StringVar'dan string al ve normalize et
+                val_str = var.get()
+                normalized = ValidationHelper.normalize_number(val_str)
+                if normalized:
+                    val = float(normalized)
+                    total += val
+            except (ValueError, AttributeError, tk.TclError):
+                pass
+        
+        # Toplam göstergesini güncelle
+        self.gas_total_label.config(text=f"{total:.2f} %")
+        
+        # Durum kontrolü
+        tolerance = 0.01  # %0.01 tolerans
+        if abs(total - 100.0) <= tolerance:
+            # Tam %100 - Yeşil
+            self.gas_total_label.config(fg="#2e7d32")  # Koyu yeşil
+            self.gas_status_label.config(text="✓", fg="#2e7d32")
+        elif total == 0:
+            # Boş - Gri
+            self.gas_total_label.config(fg="#666")
+            self.gas_status_label.config(text="", fg="#666")
+        else:
+            # %100 değil - Turuncu uyarı
+            diff = total - 100.0
+            sign = "+" if diff > 0 else ""
+            self.gas_total_label.config(fg="#e65100")  # Turuncu
+            self.gas_status_label.config(text=f"({sign}{diff:.2f}%)", fg="#e65100")
+    
+    def check_gas_composition(self):
+        """
+        Gaz bileşimi toplamını kontrol eder.
+        Returns: (is_100_percent, total, normalized_fractions, user_confirmed)
+        """
+        total = 0.0
+        raw_values = {}
+        
+        for gas_id, var in self.gas_components.items():
+            val = self.get_float_value(var, 0)
+            if val is not None and val > 0:
+                raw_values[gas_id] = val
+                total += val
+        
+        if total <= 0:
+            return (False, 0, {}, False, "Gaz bileşenleri toplamı 0'dan büyük olmalıdır.")
+        
+        tolerance = 0.01  # %0.01 tolerans
+        
+        if abs(total - 100.0) <= tolerance:
+            # Tam %100 - Normalize et ve devam
+            normalized = {k: v / total for k, v in raw_values.items()}
+            return (True, total, normalized, True, None)
+        
+        # %100 değil - Kullanıcıya sor
+        diff = total - 100.0
+        sign = "+" if diff > 0 else ""
+        
+        msg = (
+            f"⚠️ GAZ BİLEŞİMİ UYARISI\n\n"
+            f"Girilen gaz bileşimi toplamı: {total:.2f}%\n"
+            f"Fark: {sign}{diff:.2f}%\n\n"
+            f"Hesaplamaya devam etmek ister misiniz?\n\n"
+            f"'Evet' seçerseniz:\n"
+            f"  • Bileşenler ağırlıklı ortalamalarına göre\n"
+            f"    %100'e normalize edilecek.\n"
+            f"  • Orijinal oranlar korunacak.\n\n"
+            f"'Hayır' seçerseniz:\n"
+            f"  • Hesaplama iptal edilecek.\n"
+            f"  • Değerleri manuel düzeltebilirsiniz."
+        )
+        
+        user_choice = messagebox.askyesno("Gaz Bileşimi Kontrolü", msg, icon="warning")
+        
+        if user_choice:
+            # Kullanıcı devam etmek istiyor - normalize et
+            normalized = {k: v / total for k, v in raw_values.items()}
+            return (False, total, normalized, True, None)
+        else:
+            # Kullanıcı iptal etti
+            return (False, total, {}, False, "Hesaplama kullanıcı tarafından iptal edildi.")
 
     def update_ui_visibility(self, event=None):
         target = self.calc_target.get()
@@ -629,9 +1167,8 @@ class GasFlowCalculatorApp:
         
         # Gazları Yükle
         for gas_id, val in data.get("gas_components", {}).items():
-            # UI oluşturma mantığını tekrar etmemek için add_gas_component benzeri bir işlem lazım
-            # Ama burada manuel ekleyelim
-            var = tk.DoubleVar(value=val)
+            # StringVar kullan (virgül desteği için)
+            var = tk.StringVar(value=str(val))
             self.gas_components[gas_id] = var
             
             # İsim bul
@@ -640,8 +1177,16 @@ class GasFlowCalculatorApp:
             row_frame = ttk.Frame(self.gas_list_inner)
             row_frame.pack(fill="x", pady=2)
             ttk.Label(row_frame, text=gas_name, width=25).pack(side="left")
-            ttk.Entry(row_frame, textvariable=var, width=8).pack(side="left", padx=5)
+            
+            entry = ttk.Entry(row_frame, textvariable=var, width=8)
+            entry.pack(side="left", padx=5)
+            entry.bind("<KeyRelease>", lambda e: self.update_gas_total())
+            var.trace_add("write", lambda *args: self.update_gas_total())
+            
             ttk.Button(row_frame, text="X", width=3, command=lambda gid=gas_id, w=row_frame: self.remove_gas(gid, w)).pack(side="left")
+        
+        # Gaz toplamını güncelle
+        self.update_gas_total()
 
         self.comp_type.set(data.get("comp_type", "Mol %"))
         self.p_in_var.set(data.get("p_in", 0))
@@ -683,31 +1228,33 @@ class GasFlowCalculatorApp:
         if not self.gas_components:
             errors.append("Lütfen en az bir gaz bileşeni ekleyin.")
         else:
-            total_mole = sum(var.get() for var in self.gas_components.values())
+            total_mole = sum(self.get_float_value(var, 0) for var in self.gas_components.values())
             if total_mole <= 0:
                 errors.append("Toplam mol oranı 0'dan büyük olmalıdır.")
         
         # 2. Temel Parametreler
-        if self.p_in_var.get() <= 0: errors.append("Giriş basıncı pozitif olmalıdır.")
-        if self.t_var.get() <= -273.15: errors.append("Sıcaklık mutlak sıfırdan büyük olmalıdır.")
-        if self.flow_var.get() <= 0: errors.append("Akış debisi pozitif olmalıdır.")
+        if self.get_float_value(self.p_in_var, 0) <= 0: errors.append("Giriş basıncı pozitif olmalıdır.")
+        if self.get_float_value(self.t_var, 25) <= -273.15: errors.append("Sıcaklık mutlak sıfırdan büyük olmalıdır.")
+        if self.get_float_value(self.flow_var, 0) <= 0: errors.append("Akış debisi pozitif olmalıdır.")
         
         target = self.calc_target.get()
         
         # 3. Hedefe Özel Kontroller
         if target == "Çıkış Basıncı":
-            if self.len_var.get() <= 0: errors.append("Boru uzunluğu pozitif olmalıdır.")
-            if self.diam_var.get() <= 0: errors.append("Boru çapı pozitif olmalıdır.")
-            if self.thick_var.get() >= self.diam_var.get() / 2: errors.append("Et kalınlığı yarıçaptan küçük olmalıdır.")
+            if self.get_float_value(self.len_var, 0) <= 0: errors.append("Boru uzunluğu pozitif olmalıdır.")
+            if self.get_float_value(self.diam_var, 0) <= 0: errors.append("Boru çapı pozitif olmalıdır.")
+            diam = self.get_float_value(self.diam_var, 0)
+            thick = self.get_float_value(self.thick_var, 0)
+            if thick >= diam / 2: errors.append("Et kalınlığı yarıçaptan küçük olmalıdır.")
             
         elif target == "Maksimum Uzunluk":
-            if self.target_p_var.get() <= 0: errors.append("Hedef çıkış basıncı pozitif olmalıdır.")
-            if self.diam_var.get() <= 0: errors.append("Boru çapı pozitif olmalıdır.")
+            if self.get_float_value(self.target_p_var, 0) <= 0: errors.append("Hedef çıkış basıncı pozitif olmalıdır.")
+            if self.get_float_value(self.diam_var, 0) <= 0: errors.append("Boru çapı pozitif olmalıdır.")
             
         elif target == "Minimum Çap":
-            if self.max_vel_var.get() <= 0: errors.append("Maksimum hız limiti pozitif olmalıdır.")
-            if self.p_design_var.get() <= 0: errors.append("Tasarım basıncı pozitif olmalıdır.")
-            if self.flow_type.get() == "Sıkıştırılabilir" and self.len_var.get() <= 0:
+            if self.get_float_value(self.max_vel_var, 0) <= 0: errors.append("Maksimum hız limiti pozitif olmalıdır.")
+            if self.get_float_value(self.p_design_var, 0) <= 0: errors.append("Tasarım basıncı pozitif olmalıdır.")
+            if self.flow_type.get() == "Sıkıştırılabilir" and self.get_float_value(self.len_var, 0) <= 0:
                 errors.append("Sıkıştırılabilir akış çap hesabı için boru uzunluğu gereklidir.")
 
         if errors:
@@ -717,37 +1264,120 @@ class GasFlowCalculatorApp:
 
     # --- HESAPLAMA BAŞLATMA ---
     def start_calculation(self):
-        # 0. Validasyon
+        # 0. Temel Validasyon
         if not self.validate_inputs(): return
+        
+        # 1. Gaz Bileşimi Kontrolü
+        is_exact, total, mole_fractions, confirmed, error_msg = self.check_gas_composition()
+        
+        if error_msg:
+            messagebox.showerror("Gaz Bileşimi Hatası", error_msg)
+            return
+        
+        if not confirmed:
+            return  # Kullanıcı iptal etti
+        
+        # Normalize bilgisi
+        normalization_info = None
+        if not is_exact:
+            normalization_info = {
+                "original_total": total,
+                "message": f"Gaz bileşimi %{total:.2f} idi, %100'e normalize edildi."
+            }
+            self.log_message(f"⚠️ Gaz bileşimi normalize edildi: %{total:.2f} → %100", level="WARNING")
 
-        # 1. Verileri Topla
+        # 2. Verileri Topla
         try:
-            inputs = self.collect_inputs()
+            inputs = self.collect_inputs(mole_fractions_override=mole_fractions)
+            inputs["normalization_info"] = normalization_info
         except ValueError as e:
             messagebox.showerror("Girdi Hatası", str(e))
             return
 
-        # 2. Arayüzü Kilitle
-        self.calc_button.config(state="disabled", text="Hesaplanıyor...")
+        # 3. Arayüzü Kilitle ve Progress Başlat
+        self.is_calculating = True
+        self.schematic_state = "calculating"
+        self.update_progress(0, "Başlatılıyor...")
+        self.progress_canvas.config(cursor="wait")
+        self.refresh_schematic()  # Şemayı "hesaplanıyor" durumuna güncelle
+        
         self.report_text.delete(1.0, "end")
+        
+        if normalization_info:
+            self.report_text.insert("end", f"⚠️ {normalization_info['message']}\n\n")
         self.report_text.insert("end", "Hesaplama başlatıldı...\n")
 
-        # 3. Thread Başlat
+        # 4. Thread Başlat
         threading.Thread(target=self.run_calculation_thread, args=(inputs,), daemon=True).start()
-        self.root.after(100, self.check_calc_queue)
-
-    def collect_inputs(self):
-        # Gaz
-        if not self.gas_components: raise ValueError("En az bir gaz ekleyin.")
-        total_pct = sum(v.get() for v in self.gas_components.values())
-        if total_pct <= 0: raise ValueError("Gaz yüzdeleri toplamı 0 olamaz.")
         
-        mole_fractions = {k: v.get()/total_pct for k, v in self.gas_components.items() if v.get() > 0}
+        # 5. Progress animasyonu başlat
+        self._start_progress_animation()
+        self.root.after(100, self.check_calc_queue)
+    
+    def _start_progress_animation(self):
+        """Hesaplama süresince simüle edilmiş ilerleme animasyonu."""
+        if not self.is_calculating:
+            return
+        
+        # Yavaş yavaş ilerle ama %90'da dur (gerçek bitişi bekle)
+        if self.progress_value < 90:
+            # Hızlı başla, yavaşla
+            increment = max(1, (90 - self.progress_value) / 20)
+            self.progress_value = min(90, self.progress_value + increment)
+            self.update_progress(self.progress_value)
+        
+        # Hala hesaplanıyorsa devam et (100ms arayla)
+        if self.is_calculating and self.progress_value < 90:
+            self.root.after(100, self._start_progress_animation)
+
+    def get_float_value(self, var, default=0.0):
+        """DoubleVar veya StringVar'dan normalize edilmiş float değer al."""
+        try:
+            # Önce doğrudan get() dene (DoubleVar için)
+            val = var.get()
+            if isinstance(val, (int, float)):
+                return float(val)
+            # String ise normalize et
+            return ValidationHelper.parse_float(str(val), default=default) or default
+        except (tk.TclError, ValueError, AttributeError):
+            return default
+    
+    def get_int_value(self, var, default=0):
+        """IntVar veya StringVar'dan normalize edilmiş int değer al."""
+        try:
+            val = var.get()
+            if isinstance(val, int):
+                return val
+            if isinstance(val, float):
+                return int(val)
+            return ValidationHelper.parse_int(str(val), default=default) or default
+        except (tk.TclError, ValueError, AttributeError):
+            return default
+    
+    def collect_inputs(self, mole_fractions_override=None):
+        """
+        Hesaplama için gerekli tüm girdileri toplar.
+        
+        Args:
+            mole_fractions_override: Önceden hesaplanmış ve normalize edilmiş mol fraksiyonları.
+                                     None ise arayüzden hesaplanır.
+        """
+        # Gaz - Eğer override verilmişse onu kullan
+        if mole_fractions_override is not None:
+            mole_fractions = mole_fractions_override
+        else:
+            # Eski davranış - arayüzden hesapla
+            if not self.gas_components: raise ValueError("En az bir gaz ekleyin.")
+            total_pct = sum(self.get_float_value(v, 0) for v in self.gas_components.values())
+            if total_pct <= 0: raise ValueError("Gaz yüzdeleri toplamı 0 olamaz.")
+            
+            mole_fractions = {k: self.get_float_value(v, 0)/total_pct for k, v in self.gas_components.items() if self.get_float_value(v, 0) > 0}
+        
         if self.comp_type.get() == "Kütle %":
             mole_fractions = self.calculator.mass_to_mole_fraction(mole_fractions)
 
         # Basınç / Sıcaklık
-        p_in_val = self.p_in_var.get()
+        p_in_val = self.get_float_value(self.p_in_var, 0)
         p_unit = self.p_unit.get()
         # Birim Çevirme (Basitçe burada yapıyorum, normalde calculator'da da olabilir ama UI tarafında hazırlamak daha temiz)
         if p_unit == "Barg": P_in = (p_in_val + 1.01325) * 1e5
@@ -755,7 +1385,7 @@ class GasFlowCalculatorApp:
         elif p_unit == "Psig": P_in = (p_in_val + 14.696) * 6894.76
         else: P_in = p_in_val * 6894.76
 
-        t_val = self.t_var.get()
+        t_val = self.get_float_value(self.t_var, 25)
         t_unit = self.t_unit.get()
         if t_unit == "°C": T = t_val + 273.15
         elif t_unit == "°F": T = (t_val - 32) * 5/9 + 273.15
@@ -763,36 +1393,43 @@ class GasFlowCalculatorApp:
 
         # Boru
         # Boru (Girdiler mm, hesaplama mm bekliyor)
-        D_outer = self.diam_var.get()
-        t_wall = self.thick_var.get()
+        D_outer = self.get_float_value(self.diam_var, 0)
+        t_wall = self.get_float_value(self.thick_var, 0)
         D_inner = D_outer - 2 * t_wall
         if D_inner <= 0: raise ValueError("Geçersiz boru çapı/kalınlığı.")
 
         # Fittings K
         total_k = 0
         for name, var in self.fitting_counts.items():
-            count = var.get()
+            count = self.get_int_value(var, 0)
             if count > 0:
                 k = FITTING_K_FACTORS[name]
                 # Vana Kv hesabı eklenebilir (basitlik için atlıyorum, V4'teki gibi eklenebilir)
                 total_k += k * count
 
+        flow_rate = self.get_float_value(self.flow_var, 0)
+        len_val = self.get_float_value(self.len_var, 100)
+        max_vel = self.get_float_value(self.max_vel_var, 20)
+        factor_f = self.get_float_value(self.factor_f, 0.72)
+        factor_e = self.get_float_value(self.factor_e, 1.0)
+        factor_t = self.get_float_value(self.factor_t, 1.0)
+
         return {
             "P_in": P_in, "T": T, "mole_fractions": mole_fractions,
             "library_choice": self.thermo_model.get(),
-            "flow_rate": self.flow_var.get(), "flow_unit": self.flow_unit.get(),
-            "D_inner": D_inner, "L": self.len_var.get(),
+            "flow_rate": flow_rate, "flow_unit": self.flow_unit.get(),
+            "D_inner": D_inner, "L": len_val,
             "roughness": PIPE_ROUGHNESS.get(self.material_combo.get(), 4.57e-5),
             "total_k": total_k,
             "flow_property": self.flow_type.get(),
             "target": self.calc_target.get(),
-            "P_out_target": self.convert_pressure_to_pa(self.target_p_var.get(), self.target_p_unit.get(), output_type="absolute") if self.calc_target.get() == "Maksimum Uzunluk" else 0,
+            "P_out_target": self.convert_pressure_to_pa(self.get_float_value(self.target_p_var, 0), self.target_p_unit.get(), output_type="absolute") if self.calc_target.get() == "Maksimum Uzunluk" else 0,
             
             # Min Çap İçin Ekler
-            "max_velocity": self.max_vel_var.get(),
-            "P_design": self.convert_pressure_to_pa(self.p_design_var.get(), self.p_design_unit.get(), output_type="gauge"), # Barlow için Gauge
+            "max_velocity": max_vel,
+            "P_design": self.convert_pressure_to_pa(self.get_float_value(self.p_design_var, 0), self.p_design_unit.get(), output_type="gauge"), # Barlow için Gauge
             "material": self.material_combo.get(),
-            "F": self.factor_f.get(), "E": self.factor_e.get(), "T_factor": self.factor_t.get()
+            "F": factor_f, "E": factor_e, "T_factor": factor_t
         }
 
     def convert_pressure_to_pa(self, val, unit, output_type="absolute"):
@@ -834,7 +1471,10 @@ class GasFlowCalculatorApp:
     def check_calc_queue(self):
         try:
             status, data = self.calc_queue.get_nowait()
-            self.calc_button.config(state="normal", text="HESAPLA")
+            
+            # Hesaplama tamamlandı - progress'i %100 yap
+            self.update_progress(100, "Tamamlandı!")
+            self.root.after(500, self.reset_progress_button)  # 0.5 sn sonra sıfırla
             
             if status == "SUCCESS":
                 self.report_text.delete(1.0, "end")
@@ -842,13 +1482,26 @@ class GasFlowCalculatorApp:
                 self.last_result = data['result'] # Sonucu sakla
                 self.btn_show_graphs.config(state="normal")
                 
+                # Şema durumunu güncelle
+                self.schematic_state = "completed"
+                self.last_calculation_time = time.strftime("%H:%M:%S")
+                self.refresh_schematic()  # Şemayı sonuçlarla güncelle
+                
                 # Tabloyu Doldur
                 self.populate_results_table(data['result'])
                 self.res_notebook.select(self.tab_table) # Tabloyu göster
+                
+                self.log_message("✓ Hesaplama başarıyla tamamlandı.", level="INFO")
             else:
                 messagebox.showerror("Hesaplama Hatası", data)
                 self.report_text.insert("end", f"\nHATA: {data}")
                 self.btn_show_graphs.config(state="disabled")
+                
+                # Şema durumunu hata olarak güncelle
+                self.schematic_state = "error"
+                self.refresh_schematic()
+                
+                self.log_message(f"✗ Hesaplama hatası: {data}", level="ERROR")
         except queue.Empty:
             self.root.after(100, self.check_calc_queue)
 
@@ -976,6 +1629,7 @@ class GasFlowCalculatorApp:
         return res
 
     def draw_schematic(self, event=None):
+        """Hesaplama hedefine ve duruma göre interaktif sistem şeması çizer."""
         canvas = self.schematic_canvas
         canvas.delete("all")
         
@@ -984,100 +1638,405 @@ class GasFlowCalculatorApp:
         if w < 100 or h < 100: return
         
         target = self.calc_target.get()
+        state = getattr(self, 'schematic_state', 'pending')
+        
+        # ===== RENK KODLAMASI =====
+        colors = {
+            'known': "#1976d2",       # Mavi - Bilinen/Girilen değerler
+            'unknown': "#d32f2f",     # Kırmızı - Bilinmeyen/Hesaplanacak değerler
+            'calculated': "#2e7d32", # Yeşil - Hesaplanmış/Bulunan değerler
+            'warning': "#e65100",     # Turuncu - Uyarı gerektiren değerler
+            'text': "#37474f",        # Koyu gri - Normal metin
+            'pipe_fill': "#e3f2fd",   # Açık mavi - Boru dolgusu
+            'pipe_outline': "#1565c0" # Koyu mavi - Boru çerçevesi
+        }
         
         # Koordinatlar
-        mid_y = h / 2
-        margin_x = 80
+        mid_y = h / 2 + 10  # Başlık için biraz aşağı kaydır
+        margin_x = 100
         pipe_start_x = margin_x
         pipe_end_x = w - margin_x
-        pipe_width = pipe_end_x - pipe_start_x
+        pipe_height = 35
+
+        # ===== DURUM GÖSTERGESİ (Sağ üst köşe) =====
+        status_config = {
+            'pending': ("📝 Hesaplama Bekleniyor", "#757575", "#f5f5f5"),
+            'calculating': ("⏳ Hesaplanıyor...", "#ff9800", "#fff3e0"),
+            'completed': ("✅ Hesaplama Tamamlandı", "#2e7d32", "#e8f5e9"),
+            'error': ("❌ Hesaplama Hatası", "#d32f2f", "#ffebee")
+        }
+        status_text, status_color, status_bg = status_config.get(state, status_config['pending'])
         
-        # Renkler
-        pipe_fill = "#e3f2fd" # Açık mavi
-        pipe_outline = "#1565c0" # Koyu mavi
-        text_color = "#37474f"
-        highlight_color = "#d32f2f" # Kırmızı (Bilinmeyenler için)
+        # Durum kutusu
+        canvas.create_rectangle(w - 200, 5, w - 5, 35, fill=status_bg, outline=status_color, width=1)
+        canvas.create_text(w - 102, 20, text=status_text, font=("Segoe UI", 9), fill=status_color)
         
-        # --- BORU ÇİZİMİ ---
-        # Max Uzunluk ise borunun sonu "kesik" veya "belirsiz" görünsün
-        if target == "Maksimum Uzunluk":
-            # Boru gövdesi (Sağ taraf açık gibi)
-            canvas.create_rectangle(pipe_start_x, mid_y - 20, pipe_end_x - 20, mid_y + 20, fill=pipe_fill, outline=pipe_outline)
-            # Kesik çizgi efekti
-            canvas.create_line(pipe_end_x - 20, mid_y - 20, pipe_end_x, mid_y, fill=pipe_outline, dash=(4, 2))
-            canvas.create_line(pipe_end_x - 20, mid_y + 20, pipe_end_x, mid_y, fill=pipe_outline, dash=(4, 2))
+        # Son hesaplama zamanı (varsa)
+        if state == 'completed' and hasattr(self, 'last_calculation_time') and self.last_calculation_time:
+            canvas.create_text(w - 102, 48, text=f"🕐 {self.last_calculation_time}", 
+                              font=("Segoe UI", 8), fill="#757575")
+
+        # ===== BAŞLIK =====
+        title_map = {
+            "Çıkış Basıncı": ("🎯 Çıkış Basıncı Hesaplama", "P_in, T, Q, L, D → P_out"),
+            "Maksimum Uzunluk": ("📏 Maksimum Hat Uzunluğu", "P_in, P_out, T, Q, D → L_max"),
+            "Minimum Çap": ("⭕ Minimum Boru Çapı", "P_in, T, Q, V_max → D_min")
+        }
+        title, subtitle = title_map.get(target, (target, ""))
+        
+        canvas.create_text(w/2 - 50, 20, text=title, 
+                          font=("Segoe UI", 12, "bold"), fill=colors['known'], anchor="e")
+        canvas.create_text(w/2 - 45, 20, text=f"  |  {subtitle}", 
+                          font=("Segoe UI", 9), fill=colors['text'], anchor="w")
+
+        # ===== BORU ÇİZİMİ =====
+        # Durum bazlı boru stili
+        if state == 'calculating':
+            # Hesaplanıyor - animasyonlu noktalı çerçeve
+            canvas.create_rectangle(pipe_start_x, mid_y - pipe_height/2, 
+                                   pipe_end_x, mid_y + pipe_height/2, 
+                                   fill="#fff8e1", outline="#ffc107", width=3, dash=(8, 4))
+        elif state == 'completed':
+            # Tamamlandı - yeşil çerçeve
+            canvas.create_rectangle(pipe_start_x, mid_y - pipe_height/2, 
+                                   pipe_end_x, mid_y + pipe_height/2, 
+                                   fill="#e8f5e9", outline=colors['calculated'], width=2)
+        elif state == 'error':
+            # Hata - kırmızı çerçeve
+            canvas.create_rectangle(pipe_start_x, mid_y - pipe_height/2, 
+                                   pipe_end_x, mid_y + pipe_height/2, 
+                                   fill="#ffebee", outline=colors['unknown'], width=2)
         else:
-            # Standart Boru
-            canvas.create_rectangle(pipe_start_x, mid_y - 20, pipe_end_x, mid_y + 20, fill=pipe_fill, outline=pipe_outline)
-
-        # --- AKIŞ OKLARI ---
-        # Giriş
-        canvas.create_line(20, mid_y, pipe_start_x, mid_y, arrow=tk.LAST, width=3, fill="#4caf50")
-        canvas.create_text(40, mid_y - 15, text="GİRİŞ", font=("Segoe UI", 8, "bold"), fill="#2e7d32")
-        
-        # Çıkış
-        canvas.create_line(pipe_end_x, mid_y, w - 20, mid_y, arrow=tk.LAST, width=3, fill="#4caf50")
-        canvas.create_text(w - 40, mid_y - 15, text="ÇIKIŞ", font=("Segoe UI", 8, "bold"), fill="#2e7d32")
-
-        # --- BİLGİ ETİKETLERİ ---
-        try:
-            # Giriş Bilgileri (Sol Üst/Alt)
-            p_in_txt = f"P_in: {self.p_in_var.get()} {self.p_unit.get()}"
-            t_txt = f"T: {self.t_var.get()} {self.t_unit.get()}"
-            flow_txt = f"Q: {self.flow_var.get()} {self.flow_unit.get()}"
-            
-            canvas.create_text(pipe_start_x, mid_y - 40, text=p_in_txt, anchor="sw", font=("Consolas", 9), fill=text_color)
-            canvas.create_text(pipe_start_x, mid_y + 35, text=t_txt, anchor="nw", font=("Consolas", 9), fill=text_color)
-            canvas.create_text(pipe_start_x, mid_y + 50, text=flow_txt, anchor="nw", font=("Consolas", 9), fill=text_color)
-
-            # --- HEDEFE GÖRE GÖSTERİM ---
-            
-            # 1. UZUNLUK (L)
-            if target == "Maksimum Uzunluk":
-                # L = ?
-                canvas.create_line(pipe_start_x, mid_y + 80, pipe_end_x, mid_y + 80, arrow=tk.BOTH, fill=highlight_color, width=2)
-                canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y + 75, text="L = ???", font=("Segoe UI", 10, "bold"), fill=highlight_color, anchor="s")
-                
-                # P_out Hedef
-                p_out_txt = f"P_out (Hedef): {self.target_p_var.get()} {self.target_p_unit.get()}"
-                canvas.create_text(pipe_end_x, mid_y - 40, text=p_out_txt, anchor="se", font=("Consolas", 9, "bold"), fill="#1976d2")
-                
-            else:
-                # L Biliniyor
-                L_val = self.len_var.get()
-                canvas.create_line(pipe_start_x, mid_y + 80, pipe_end_x, mid_y + 80, arrow=tk.BOTH, fill=text_color)
-                canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y + 75, text=f"L = {L_val} m", font=("Segoe UI", 9), fill=text_color, anchor="s")
-
-            # 2. ÇAP (D)
+            # Bekliyor - normal
             if target == "Minimum Çap":
-                # D = ?
-                canvas.create_line(pipe_end_x + 10, mid_y - 20, pipe_end_x + 10, mid_y + 20, arrow=tk.BOTH, fill=highlight_color, width=2)
-                canvas.create_text(pipe_end_x + 15, mid_y, text="D = ?", font=("Segoe UI", 10, "bold"), fill=highlight_color, anchor="w")
-                
-                # Hız Limiti
-                v_txt = f"V_max: {self.max_vel_var.get()} m/s"
-                canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y, text=v_txt, font=("Segoe UI", 9, "bold"), fill="#d32f2f")
+                canvas.create_rectangle(pipe_start_x, mid_y - pipe_height/2, 
+                                       pipe_end_x, mid_y + pipe_height/2, 
+                                       fill="#fff3e0", outline=colors['unknown'], width=2, dash=(5, 3))
+            elif target == "Maksimum Uzunluk":
+                canvas.create_rectangle(pipe_start_x, mid_y - pipe_height/2, 
+                                       pipe_end_x - 30, mid_y + pipe_height/2, 
+                                       fill=colors['pipe_fill'], outline=colors['pipe_outline'], width=2)
+                # Kesik çizgi (belirsiz uzunluk)
+                for i in range(5):
+                    y_off = -pipe_height/2 + i * (pipe_height/4)
+                    canvas.create_line(pipe_end_x - 30, mid_y + y_off, 
+                                      pipe_end_x - 10, mid_y + y_off + 3,
+                                      fill=colors['pipe_outline'], dash=(2, 2), width=2)
             else:
-                # D Biliniyor
-                D_val = self.diam_var.get()
-                canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y, text=f"D = {D_val} mm", font=("Segoe UI", 9), fill=text_color)
+                canvas.create_rectangle(pipe_start_x, mid_y - pipe_height/2, 
+                                       pipe_end_x, mid_y + pipe_height/2, 
+                                       fill=colors['pipe_fill'], outline=colors['pipe_outline'], width=2)
 
-            # 3. ÇIKIŞ BASINCI (P_out)
+        # ===== AKIŞ OKLARI =====
+        arrow_color = colors['calculated'] if state == 'completed' else "#4caf50"
+        canvas.create_line(25, mid_y, pipe_start_x, mid_y, arrow=tk.LAST, width=4, fill=arrow_color)
+        canvas.create_text(45, mid_y - 22, text="➡️ GİRİŞ", font=("Segoe UI", 9, "bold"), fill=arrow_color)
+        
+        canvas.create_line(pipe_end_x, mid_y, w - 25, mid_y, arrow=tk.LAST, width=4, fill=arrow_color)
+        canvas.create_text(w - 45, mid_y - 22, text="ÇIKIŞ ➡️", font=("Segoe UI", 9, "bold"), fill=arrow_color)
+
+        # ===== GİRİŞ PARAMETRELERİ (Sol Panel) =====
+        try:
+            left_x = 15
+            left_y = mid_y - 75
+            lh = 20  # line height
+            
+            # Giriş Basıncı (her zaman bilinen)
+            p_in_val = self.get_float_value(self.p_in_var, 0)
+            canvas.create_text(left_x, left_y, 
+                              text=f"🔵 P_giriş: {p_in_val} {self.p_unit.get()}", 
+                              anchor="w", font=("Segoe UI", 9, "bold"), fill=colors['known'])
+            
+            # Sıcaklık
+            t_val = self.get_float_value(self.t_var, 25)
+            canvas.create_text(left_x, left_y + lh, 
+                              text=f"🌡️ Sıcaklık: {t_val} {self.t_unit.get()}", 
+                              anchor="w", font=("Segoe UI", 9), fill=colors['known'])
+            
+            # Debi
+            flow_val = self.get_float_value(self.flow_var, 0)
+            canvas.create_text(left_x, left_y + 2*lh, 
+                              text=f"💨 Debi: {flow_val} {self.flow_unit.get()}", 
+                              anchor="w", font=("Segoe UI", 9), fill=colors['known'])
+
+            # ===== HEDEF BAZLI ÖZEL GÖSTERİMLER =====
+            result = getattr(self, 'last_result', None) if state == 'completed' else None
+            
             if target == "Çıkış Basıncı":
-                # P_out = ?
-                canvas.create_text(pipe_end_x, mid_y - 40, text="P_out = ???", anchor="se", font=("Segoe UI", 10, "bold"), fill=highlight_color)
-            elif target != "Maksimum Uzunluk": # Min Çap veya diğerleri
-                # P_out hesabı sonucunda çıkacak ama hedef değil
-                 pass
+                self._draw_pressure_drop_schematic(canvas, w, h, mid_y, pipe_start_x, pipe_end_x, 
+                                                   pipe_height, colors, result, state)
+                
+            elif target == "Maksimum Uzunluk":
+                self._draw_max_length_schematic(canvas, w, h, mid_y, pipe_start_x, pipe_end_x, 
+                                                pipe_height, colors, result, state)
+                
+            elif target == "Minimum Çap":
+                self._draw_min_diameter_schematic(canvas, w, h, mid_y, pipe_start_x, pipe_end_x, 
+                                                  pipe_height, colors, result, state)
 
-            # Fittings Sayısı
-            total_fit = sum(v.get() for v in self.fitting_counts.values())
+            # ===== FITTINGS GÖSTERİMİ =====
+            total_fit = sum(self.get_int_value(v, 0) for v in self.fitting_counts.values())
             if total_fit > 0:
-                canvas.create_oval(pipe_start_x + 40, mid_y - 15, pipe_start_x + 50, mid_y - 5, fill="orange", outline="orange")
-                canvas.create_text(pipe_start_x + 55, mid_y - 10, text=f"{total_fit} Fittings", anchor="w", font=("Segoe UI", 7), fill="orange")
+                fit_x = pipe_start_x + 70
+                canvas.create_rectangle(fit_x - 10, mid_y - 14, fit_x + 10, mid_y + 14, 
+                                        fill="#ff9800", outline="#e65100", width=2)
+                canvas.create_text(fit_x, mid_y, text="⚙️", font=("Segoe UI", 9))
+                canvas.create_text(fit_x, mid_y - 30, 
+                                  text=f"🔧 {total_fit} Fitting", 
+                                  font=("Segoe UI", 8, "bold"), fill=colors['warning'])
 
         except Exception as e:
-            canvas.create_text(w/2, h/2, text=f"Çizim Hatası: {str(e)}", fill="red")
+            canvas.create_text(w/2, h - 20, text=f"⚠️ Çizim Hatası: {str(e)}", fill="red")
+    
+    def _draw_pressure_drop_schematic(self, canvas, w, h, mid_y, pipe_start_x, pipe_end_x, pipe_height, colors, result, state):
+        """Çıkış Basıncı hesabı için şema detayları."""
+        # Boru altı: Uzunluk (bilinen)
+        L_val = self.get_float_value(self.len_var, 0)
+        canvas.create_line(pipe_start_x, mid_y + 55, pipe_end_x, mid_y + 55, 
+                          arrow=tk.BOTH, fill=colors['known'], width=1)
+        canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y + 70, 
+                          text=f"📐 Uzunluk: {L_val} m", 
+                          font=("Segoe UI", 9), fill=colors['known'])
+        
+        # Boru içi: Çap (bilinen)
+        D_val = self.get_float_value(self.diam_var, 0)
+        t_wall = self.get_float_value(self.thick_var, 0)
+        D_inner = D_val - 2 * t_wall if D_val > 0 else 0
+        canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y, 
+                          text=f"⭕ OD:{D_val} | ID:{D_inner:.1f} mm", 
+                          font=("Segoe UI", 8), fill=colors['text'])
+        
+        # Sağ üst: Çıkış Basıncı (bilinmeyen veya hesaplanmış)
+        if result and 'P_out' in result:
+            # Hesaplanmış - yeşil kutu
+            p_out = result['P_out'] / 1e5
+            delta_p = result.get('delta_p_total', 0) / 1e5
+            v_out = result.get('velocity_out', 0)
+            v_in = result.get('velocity_in', 0)
+            
+            # Ana sonuç kutusu
+            canvas.create_rectangle(w - 165, mid_y - 90, w - 5, mid_y - 30, 
+                                    fill="#e8f5e9", outline=colors['calculated'], width=2)
+            canvas.create_text(w - 85, mid_y - 75, 
+                              text=f"✅ P_çıkış: {p_out:.3f} bar", 
+                              font=("Segoe UI", 10, "bold"), fill=colors['calculated'])
+            canvas.create_text(w - 85, mid_y - 55, 
+                              text=f"📉 ΔP_toplam: {delta_p:.3f} bar", 
+                              font=("Segoe UI", 8), fill=colors['warning'])
+            
+            # Hız profili (boru altı)
+            v_color = colors['warning'] if v_out > 20 else colors['calculated']
+            canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y + 90, 
+                              text=f"💨 Hız: {v_in:.1f} → {v_out:.1f} m/s", 
+                              font=("Segoe UI", 9, "bold"), fill=v_color)
+            
+            # ===== DETAY PANELİ (Alt kısım) =====
+            detail_y = h - 60
+            canvas.create_line(15, detail_y - 25, w - 15, detail_y - 25, 
+                              fill="#e0e0e0", width=1)
+            canvas.create_text(w/2, detail_y - 35, 
+                              text="📊 HESAPLAMA DETAYLARI", 
+                              font=("Segoe UI", 9, "bold"), fill=colors['known'])
+            
+            # Reynolds sayısı
+            Re = result.get('Re', 0)
+            Re_text = f"Re: {Re:.0f}" if Re < 10000 else f"Re: {Re/1000:.1f}k"
+            flow_regime = "Laminer" if Re < 2300 else ("Geçiş" if Re < 4000 else "Türbülanslı")
+            regime_color = colors['calculated'] if Re >= 4000 else colors['warning']
+            canvas.create_text(w/6, detail_y, 
+                              text=f"🔄 {Re_text} ({flow_regime})", 
+                              font=("Segoe UI", 8), fill=regime_color)
+            
+            # Sürtünme faktörü
+            f = result.get('friction_factor', 0)
+            canvas.create_text(2*w/6, detail_y, 
+                              text=f"📏 f: {f:.5f}", 
+                              font=("Segoe UI", 8), fill=colors['text'])
+            
+            # Basınç kaybı dağılımı
+            dp_pipe = result.get('delta_p_pipe', 0) / 1e5
+            dp_fittings = result.get('delta_p_fittings', 0) / 1e5
+            total_dp = dp_pipe + dp_fittings if (dp_pipe + dp_fittings) > 0 else 1
+            pipe_pct = (dp_pipe / total_dp) * 100 if total_dp > 0 else 0
+            
+            canvas.create_text(3*w/6, detail_y, 
+                              text=f"🔧 Boru: {dp_pipe:.3f} bar ({pipe_pct:.0f}%)", 
+                              font=("Segoe UI", 8), fill=colors['text'])
+            
+            canvas.create_text(4*w/6, detail_y, 
+                              text=f"⚙️ Fitting: {dp_fittings:.3f} bar ({100-pipe_pct:.0f}%)", 
+                              font=("Segoe UI", 8), fill=colors['warning'])
+            
+            # Yoğunluk bilgisi
+            rho = result.get('rho_in', 0)
+            canvas.create_text(5*w/6, detail_y, 
+                              text=f"⚖️ ρ: {rho:.2f} kg/m³", 
+                              font=("Segoe UI", 8), fill=colors['text'])
+        else:
+            # Bilinmeyen - kırmızı kutu
+            canvas.create_rectangle(w - 150, mid_y - 85, w - 5, mid_y - 45, 
+                                    fill="#ffebee", outline=colors['unknown'], width=2)
+            canvas.create_text(w - 77, mid_y - 65, 
+                              text="❓ P_çıkış = ???", 
+                              font=("Segoe UI", 11, "bold"), fill=colors['unknown'])
+    
+    def _draw_max_length_schematic(self, canvas, w, h, mid_y, pipe_start_x, pipe_end_x, pipe_height, colors, result, state):
+        """Maksimum Uzunluk hesabı için şema detayları."""
+        # Sağ üst: Hedef Çıkış Basıncı (bilinen)
+        p_out_target = self.get_float_value(self.target_p_var, 0)
+        canvas.create_rectangle(w - 170, mid_y - 85, w - 5, mid_y - 50, 
+                                fill="#e3f2fd", outline=colors['known'], width=2)
+        canvas.create_text(w - 87, mid_y - 67, 
+                          text=f"🎯 P_hedef: {p_out_target} {self.target_p_unit.get()}", 
+                          font=("Segoe UI", 9, "bold"), fill=colors['known'])
+        
+        # Boru içi: Çap (bilinen)
+        D_val = self.get_float_value(self.diam_var, 0)
+        canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y, 
+                          text=f"⭕ Çap: {D_val} mm", 
+                          font=("Segoe UI", 9), fill=colors['known'])
+        
+        # Boru altı: Uzunluk (bilinmeyen veya hesaplanmış)
+        if result and 'L_max' in result:
+            # Hesaplanmış - yeşil kutu
+            L_max = result['L_max']
+            canvas.create_rectangle((pipe_start_x + pipe_end_x)/2 - 90, mid_y + 45, 
+                                    (pipe_start_x + pipe_end_x)/2 + 90, mid_y + 85, 
+                                    fill="#e8f5e9", outline=colors['calculated'], width=2)
+            canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y + 55, 
+                              text=f"✅ L_max = {L_max:.2f} m", 
+                              font=("Segoe UI", 11, "bold"), fill=colors['calculated'])
+            canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y + 75, 
+                              text=f"({L_max/1000:.3f} km)", 
+                              font=("Segoe UI", 8), fill=colors['text'])
+            
+            # ===== DETAY PANELİ (Alt kısım) =====
+            detail_y = h - 60
+            canvas.create_line(15, detail_y - 25, w - 15, detail_y - 25, 
+                              fill="#e0e0e0", width=1)
+            canvas.create_text(w/2, detail_y - 35, 
+                              text="📊 HESAPLAMA DETAYLARI", 
+                              font=("Segoe UI", 9, "bold"), fill=colors['known'])
+            
+            # Reynolds ve akış rejimi
+            Re = result.get('Re', 0)
+            Re_text = f"Re: {Re:.0f}" if Re < 10000 else f"Re: {Re/1000:.1f}k"
+            flow_regime = "Laminer" if Re < 2300 else ("Geçiş" if Re < 4000 else "Türbülanslı")
+            canvas.create_text(w/5, detail_y, 
+                              text=f"🔄 {Re_text} ({flow_regime})", 
+                              font=("Segoe UI", 8), fill=colors['calculated'])
+            
+            # Hız
+            v = result.get('velocity_in', 0)
+            v_color = colors['warning'] if v > 20 else colors['text']
+            canvas.create_text(2*w/5, detail_y, 
+                              text=f"💨 Hız: {v:.1f} m/s", 
+                              font=("Segoe UI", 8), fill=v_color)
+            
+            # Basınç farkı
+            delta_p = result.get('delta_p_available', 0) / 1e5
+            canvas.create_text(3*w/5, detail_y, 
+                              text=f"📉 ΔP kullanılan: {delta_p:.3f} bar", 
+                              font=("Segoe UI", 8), fill=colors['warning'])
+            
+            # Sürtünme faktörü
+            f = result.get('friction_factor', 0)
+            canvas.create_text(4*w/5, detail_y, 
+                              text=f"📏 f: {f:.5f}", 
+                              font=("Segoe UI", 8), fill=colors['text'])
+        else:
+            # Bilinmeyen - kırmızı kutu
+            canvas.create_line(pipe_start_x, mid_y + 55, pipe_end_x - 30, mid_y + 55, 
+                              arrow=tk.BOTH, fill=colors['unknown'], width=2, dash=(5, 3))
+            canvas.create_rectangle((pipe_start_x + pipe_end_x)/2 - 70, mid_y + 45, 
+                                    (pipe_start_x + pipe_end_x)/2 + 70, mid_y + 80, 
+                                    fill="#ffebee", outline=colors['unknown'], width=2)
+            canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y + 62, 
+                              text="❓ L_max = ??? m", 
+                              font=("Segoe UI", 11, "bold"), fill=colors['unknown'])
+    
+    def _draw_min_diameter_schematic(self, canvas, w, h, mid_y, pipe_start_x, pipe_end_x, pipe_height, colors, result, state):
+        """Minimum Çap hesabı için şema detayları."""
+        # Boru içi: Hız limiti (bilinen)
+        v_max = self.get_float_value(self.max_vel_var, 20)
+        canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y - 5, 
+                          text=f"⚡ V_max ≤ {v_max} m/s", 
+                          font=("Segoe UI", 9, "bold"), fill=colors['warning'])
+        
+        # Sıkıştırılabilir ise uzunluk göster
+        if self.flow_type.get() == "Sıkıştırılabilir":
+            L_val = self.get_float_value(self.len_var, 0)
+            canvas.create_text((pipe_start_x + pipe_end_x)/2, mid_y + 60, 
+                              text=f"📐 Uzunluk: {L_val} m", 
+                              font=("Segoe UI", 9), fill=colors['known'])
+        
+        # Sağ taraf: Çap (bilinmeyen veya hesaplanmış)
+        if result and result.get('selected_pipe'):
+            # Hesaplanmış - yeşil kutu
+            pipe = result['selected_pipe']
+            v_out = result.get('velocity_out', 0)
+            v_color = colors['warning'] if v_out > v_max * 0.9 else colors['calculated']
+            
+            canvas.create_rectangle(w - 165, mid_y - 55, w - 5, mid_y + 55, 
+                                    fill="#e8f5e9", outline=colors['calculated'], width=2)
+            canvas.create_text(w - 85, mid_y - 38, 
+                              text=f"✅ {pipe['nominal']}\"", 
+                              font=("Segoe UI", 13, "bold"), fill=colors['calculated'])
+            canvas.create_text(w - 85, mid_y - 18, 
+                              text=f"Sch {pipe['schedule']}", 
+                              font=("Segoe UI", 9), fill=colors['text'])
+            canvas.create_text(w - 85, mid_y + 2, 
+                              text=f"ID: {pipe['D_inner_mm']:.1f} mm", 
+                              font=("Segoe UI", 9), fill=colors['known'])
+            canvas.create_text(w - 85, mid_y + 22, 
+                              text=f"OD: {pipe['D_outer_mm']:.1f} mm", 
+                              font=("Segoe UI", 8), fill=colors['text'])
+            canvas.create_text(w - 85, mid_y + 42, 
+                              text=f"💨 V: {v_out:.1f} m/s", 
+                              font=("Segoe UI", 9, "bold"), fill=v_color)
+            
+            # ===== DETAY PANELİ (Alt kısım) =====
+            detail_y = h - 60
+            canvas.create_line(15, detail_y - 25, w - 15, detail_y - 25, 
+                              fill="#e0e0e0", width=1)
+            canvas.create_text(w/2, detail_y - 35, 
+                              text="📊 SEÇİM DETAYLARI", 
+                              font=("Segoe UI", 9, "bold"), fill=colors['known'])
+            
+            # Minimum teorik çap
+            D_min_theo = result.get('D_min_theoretical_mm', 0)
+            canvas.create_text(w/5, detail_y, 
+                              text=f"📐 Min. Teorik Çap: {D_min_theo:.1f} mm", 
+                              font=("Segoe UI", 8), fill=colors['text'])
+            
+            # Et kalınlığı
+            t_wall = pipe.get('t_mm', 0)
+            canvas.create_text(2*w/5, detail_y, 
+                              text=f"📏 Et Kalınlığı: {t_wall:.2f} mm", 
+                              font=("Segoe UI", 8), fill=colors['text'])
+            
+            # Hız kullanım oranı
+            v_usage = (v_out / v_max) * 100 if v_max > 0 else 0
+            v_usage_color = colors['calculated'] if v_usage < 80 else colors['warning']
+            canvas.create_text(3*w/5, detail_y, 
+                              text=f"⚡ Hız Kullanımı: %{v_usage:.0f}", 
+                              font=("Segoe UI", 8), fill=v_usage_color)
+            
+            # Alternatif boru sayısı
+            alternatives = result.get('alternative_pipes', [])
+            canvas.create_text(4*w/5, detail_y, 
+                              text=f"🔧 {len(alternatives)} alternatif boru mevcut", 
+                              font=("Segoe UI", 8), fill=colors['known'])
+        else:
+            # Bilinmeyen - kırmızı kutu
+            canvas.create_line(pipe_end_x + 15, mid_y - pipe_height/2, 
+                              pipe_end_x + 15, mid_y + pipe_height/2, 
+                              arrow=tk.BOTH, fill=colors['unknown'], width=2)
+            canvas.create_rectangle(w - 120, mid_y - 35, w - 10, mid_y + 35, 
+                                    fill="#ffebee", outline=colors['unknown'], width=2)
+            canvas.create_text(w - 65, mid_y, 
+                              text="❓ D = ?", 
+                              font=("Segoe UI", 14, "bold"), fill=colors['unknown'])
 
     def show_graphs(self):
         if not hasattr(self, 'last_result') or not self.last_result: return
