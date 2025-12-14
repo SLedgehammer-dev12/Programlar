@@ -30,6 +30,7 @@ from advanced_solver import show_solver_comparison
 from network_templates import NetworkTemplateDialog
 from cad_export import show_cad_export_dialog
 from water_hammer import show_water_hammer_analysis
+from updater import show_update_dialog
 
 
 class FireHydraApp(tk.Tk):
@@ -171,6 +172,8 @@ class FireHydraApp(tk.Tk):
         # Yardım menüsü
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Yardım", menu=help_menu)
+        help_menu.add_command(label="Güncellemeleri Kontrol Et...", command=self._check_updates)
+        help_menu.add_separator()
         help_menu.add_command(label="Kullanım Kılavuzu", command=self._show_help)
         help_menu.add_command(label="Formüller", command=self._show_formulas)
         help_menu.add_separator()
@@ -1454,6 +1457,10 @@ HİDROLİK FORMÜLLER
    Q_new = Q_old × √(P_target / P_current)
         """
         messagebox.showinfo("Formüller", formulas_text)
+    
+    def _check_updates(self):
+        """Güncellemeleri kontrol et"""
+        show_update_dialog(self)
     
     def _show_about(self):
         """Hakkında"""
