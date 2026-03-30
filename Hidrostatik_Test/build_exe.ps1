@@ -266,8 +266,10 @@ if (-not $SkipTests) {
     & $PythonExe -m py_compile `
         (Join-Path $projectRoot "Hidrostatik_Test_Chat.py") `
         (Join-Path $projectRoot "hydrotest_core.py") `
+        (Join-Path $projectRoot "pipe_catalog.py") `
         (Join-Path $projectRoot "updater.py") `
         (Join-Path $projectRoot "test_hydrotest_core.py") `
+        (Join-Path $projectRoot "test_pipe_catalog.py") `
         (Join-Path $projectRoot "test_ui_workflow.py") `
         (Join-Path $projectRoot "test_updater.py") `
         (Join-Path $projectRoot "app_metadata.py")
@@ -275,7 +277,7 @@ if (-not $SkipTests) {
         Write-Warning "py_compile adimi Windows dosya kilidi nedeniyle atlandi. Unit test ve import smoke check devam ediyor."
     }
 
-    & $PythonExe -c "import sys; sys.path.insert(0, r'$projectRoot'); import Hidrostatik_Test_Chat; import hydrotest_core; import updater; import app_metadata; print('import-ok')"
+    & $PythonExe -c "import sys; sys.path.insert(0, r'$projectRoot'); import Hidrostatik_Test_Chat; import hydrotest_core; import pipe_catalog; import updater; import app_metadata; print('import-ok')"
     if ($LASTEXITCODE -ne 0) {
         throw "Import smoke check basarisiz oldu."
     }

@@ -37,10 +37,10 @@ class UpdaterTests(unittest.TestCase):
                 "published_at": "2026-03-01T12:00:00Z",
             },
             {
-                "tag_name": "hidrostatik-test-v1.2.1",
+                "tag_name": "hidrostatik-test-v1.3.1",
                 "draft": False,
                 "prerelease": False,
-                "assets": [{"name": "HidrostatikTest-v1.2.1-windows-x64.zip", "browser_download_url": "https://example.com/app.zip", "size": 42}],
+                "assets": [{"name": "HidrostatikTest-v1.3.1-windows-x64.zip", "browser_download_url": "https://example.com/app.zip", "size": 42}],
                 "html_url": "https://example.com/app",
                 "body": "notes",
                 "published_at": "2026-03-30T12:00:00Z",
@@ -50,10 +50,10 @@ class UpdaterTests(unittest.TestCase):
         with patch("updater.urlopen", return_value=_FakeResponse(payload)):
             info = fetch_latest_update_info()
 
-        self.assertEqual(info.latest_version, "1.2.1")
+        self.assertEqual(info.latest_version, "1.3.1")
         self.assertTrue(info.update_available)
         self.assertIsNotNone(info.asset)
-        self.assertEqual(info.asset.name, "HidrostatikTest-v1.2.1-windows-x64.zip")
+        self.assertEqual(info.asset.name, "HidrostatikTest-v1.3.1-windows-x64.zip")
 
     def test_fetch_latest_update_info_marks_current_version_up_to_date(self) -> None:
         payload = [
@@ -109,13 +109,13 @@ class UpdateUiTests(unittest.TestCase):
     def test_update_result_marks_new_release_as_available(self) -> None:
         info = UpdateInfo(
             current_version=APP_VERSION,
-            latest_version="1.2.1",
-            tag_name="hidrostatik-test-v1.2.1",
+            latest_version="1.3.1",
+            tag_name="hidrostatik-test-v1.3.1",
             html_url="https://example.com/update",
             body="notes",
             published_at="2026-03-30T12:00:00Z",
             asset=ReleaseAsset(
-                name="HidrostatikTest-v1.2.1-windows-x64.zip",
+                name="HidrostatikTest-v1.3.1-windows-x64.zip",
                 download_url="https://example.com/update.zip",
                 size=1024,
             ),
@@ -125,7 +125,7 @@ class UpdateUiTests(unittest.TestCase):
         self.app._handle_update_check_result(info, user_requested=True)
 
         self.assertIn("Yeni surum bulundu", self.app.update_status_var.get())
-        self.assertIn("HidrostatikTest-v1.2.1-windows-x64.zip", self.app.update_detail_var.get())
+        self.assertIn("HidrostatikTest-v1.3.1-windows-x64.zip", self.app.update_detail_var.get())
 
 
 if __name__ == "__main__":

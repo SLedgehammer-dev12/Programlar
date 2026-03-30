@@ -10,8 +10,8 @@ dogrulama adimlarini standardize eder.
 Her anlamli degisiklikten sonra asagidaki komutlar calistirilir:
 
 - `python -m unittest discover -s "d:\Program\Python USB\Hidrostatik_Test" -p "test_*.py"`
-- `python -m py_compile "d:\Program\Python USB\Hidrostatik_Test\Hidrostatik_Test_Chat.py" "d:\Program\Python USB\Hidrostatik_Test\hydrotest_core.py" "d:\Program\Python USB\Hidrostatik_Test\updater.py" "d:\Program\Python USB\Hidrostatik_Test\test_hydrotest_core.py" "d:\Program\Python USB\Hidrostatik_Test\test_ui_workflow.py" "d:\Program\Python USB\Hidrostatik_Test\test_updater.py" "d:\Program\Python USB\Hidrostatik_Test\app_metadata.py"`
-- `python -c "import sys; sys.path.insert(0, r'd:\Program\Python USB\Hidrostatik_Test'); import Hidrostatik_Test_Chat; import hydrotest_core; import updater; import app_metadata; print('import-ok')"`
+- `python -m py_compile "d:\Program\Python USB\Hidrostatik_Test\Hidrostatik_Test_Chat.py" "d:\Program\Python USB\Hidrostatik_Test\hydrotest_core.py" "d:\Program\Python USB\Hidrostatik_Test\pipe_catalog.py" "d:\Program\Python USB\Hidrostatik_Test\updater.py" "d:\Program\Python USB\Hidrostatik_Test\test_hydrotest_core.py" "d:\Program\Python USB\Hidrostatik_Test\test_pipe_catalog.py" "d:\Program\Python USB\Hidrostatik_Test\test_ui_workflow.py" "d:\Program\Python USB\Hidrostatik_Test\test_updater.py" "d:\Program\Python USB\Hidrostatik_Test\app_metadata.py"`
+- `python -c "import sys; sys.path.insert(0, r'd:\Program\Python USB\Hidrostatik_Test'); import Hidrostatik_Test_Chat; import hydrotest_core; import pipe_catalog; import updater; import app_metadata; print('import-ok')"`
 
 ## Build ve Release Kontrolu
 
@@ -34,6 +34,9 @@ UI veya release degisikliginden sonra asagidaki akislar en az bir kez denenir:
 6. Uretilen `.exe` temiz klasorde aciliyor mu kontrol et.
 7. Acilista guncelleme kontrolu banner ve durum bilgisini guncelliyor mu kontrol et.
 8. `Guncelleme Kontrol Et` butonu yeni surum veya guncel surum mesajini dogru gosteriyor mu kontrol et.
+9. ASME B36.10 secimi `Dis cap` ve `Et kalinligi` alanlarini dogru dolduruyor mu kontrol et.
+10. Segment ekleme ve silme akisi toplam geometri ozetini dogru guncelliyor mu kontrol et.
+11. Ust menu altindaki `Dosya`, `Rapor`, `Guncelleme`, `Hakkinda` komutlari beklenen islemleri aciyor mu kontrol et.
 
 ## Notlar
 

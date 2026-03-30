@@ -11,9 +11,12 @@ Tkinter tabanli arayuz ile hesap motoru birbirinden ayrilmistir.
 - Hava icerik testi ve basinc degisim testi calisiyor.
 - Hesap cekirdegi `hydrotest_core.py` icinde tutuluyor.
 - UI durum yonetimi ve raporlama `Hidrostatik_Test_Chat.py` icinde.
+- Boru geometrisi manuel girilebildigi gibi ASME B36.10 listesinden NPS ve schedule secilerek doldurulabiliyor.
+- Birden fazla et kalinligina sahip segmentler ayni hat icinde birlikte modellenebiliyor.
+- Ust menu yapisi `Dosya`, `Rapor`, `Guncelleme` ve `Hakkinda` basliklariyla duzenlendi.
 - Acilista otomatik guncelleme kontrolu ve manuel guncelleme kontrolu eklendi.
 - Uygun release bulundugunda Windows `.exe` paketi kendini guncelleyebiliyor.
-- Otomatik test paketi 27 test ile calisiyor.
+- Otomatik test paketi 33 test ile calisiyor.
 - Windows one-dir release paketi `build_exe.ps1` ile uretiliyor.
 - GitHub release icin `.zip`, `.sha256.txt` ve release note dosyalari uretiliyor.
 
@@ -36,6 +39,7 @@ Tkinter tabanli arayuz ile hesap motoru birbirinden ayrilmistir.
 
 - `Hidrostatik_Test_Chat.py`: Tkinter arayuzu
 - `hydrotest_core.py`: hesap motoru ve validasyonlar
+- `pipe_catalog.py`: ASME B36.10 tabanli boru capi ve et kalinligi katalogu
 - `app_metadata.py`: uygulama adi, surum ve yayin metadata'si
 - `build_exe.ps1`: Windows release build scripti
 - `windows_manifest.xml`: Windows manifest tanimi

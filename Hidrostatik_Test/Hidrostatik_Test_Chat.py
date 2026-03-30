@@ -12,6 +12,7 @@ from hydrotest_core import (
     SEAMLESS_PIPE_K,
     WELDED_PIPE_K,
     AirContentInputs,
+    PipeGeometry,
     PipeSection,
     PressureVariationInputs,
     ValidationError,
@@ -21,6 +22,7 @@ from hydrotest_core import (
     evaluate_air_content_test,
     evaluate_pressure_variation_test,
 )
+from pipe_catalog import find_pipe_size, find_schedule, get_pipe_size_options, get_schedule_options
 from updater import UpdateError, UpdateInfo, fetch_latest_update_info, install_update, open_release_page
 
 DEFAULT_DECISION_TITLE = "Henuz degerlendirme yapilmadi"
@@ -41,6 +43,10 @@ class HydrostaticTestApp:
             "outside_diameter_mm": tk.StringVar(),
             "wall_thickness_mm": tk.StringVar(),
             "length_m": tk.StringVar(),
+        }
+        self.geometry_catalog_vars = {
+            "size_option": tk.StringVar(),
+            "schedule_option": tk.StringVar(),
         }
         self.air_vars = {
             "temperature_c": tk.StringVar(),
@@ -80,6 +86,9 @@ class HydrostaticTestApp:
         self.geometry_summary_var = tk.StringVar(
             value="Geometri girildiginde ic cap, ic yaricap ve hacim ozeti burada gosterilir."
         )
+        self.segment_summary_var = tk.StringVar(
+            value="Segmentasyon kullanilmazsa ustteki geometri alanlari tek boru kesiti olarak kullanilir."
+        )
         self.workflow_hint_var = tk.StringVar()
         self.helper_mode_summary_var = tk.StringVar()
         self.decision_title_var = tk.StringVar(value=DEFAULT_DECISION_TITLE)
@@ -105,10 +114,12 @@ class HydrostaticTestApp:
         self.field_message_vars: dict[str, tk.StringVar] = {}
         self.touched_fields: set[str] = set()
         self.report_entries: list[str] = []
+        self.geometry_segments: list[dict[str, object]] = []
         self.latest_update_info: UpdateInfo | None = None
         self.update_check_in_progress = False
         self.update_install_in_progress = False
 
+        self._build_menu()
         self._build_ui()
         self._register_traces()
         self._bind_shortcuts()
@@ -117,6 +128,33 @@ class HydrostaticTestApp:
         self._update_workflow_hint()
         self._apply_b_helper_mode()
         self.root.after(1200, self._check_for_updates_on_startup)
+
+    def _build_menu(self) -> None:
+        menu_bar = tk.Menu(self.root)
+
+        file_menu = tk.Menu(menu_bar, tearoff=False)
+        file_menu.add_command(label="Raporu Kaydet", command=self._save_report)
+        file_menu.add_separator()
+        file_menu.add_command(label="Cikis", command=self.root.destroy)
+        menu_bar.add_cascade(label="Dosya", menu=file_menu)
+
+        report_menu = tk.Menu(menu_bar, tearoff=False)
+        report_menu.add_command(label="Raporu Kaydet", command=self._save_report)
+        report_menu.add_command(label="Sonuclari Temizle", command=self._clear_results)
+        menu_bar.add_cascade(label="Rapor", menu=report_menu)
+
+        update_menu = tk.Menu(menu_bar, tearoff=False)
+        update_menu.add_command(label="Guncelleme Kontrol Et", command=self._check_for_updates_manually)
+        update_menu.add_command(label="Guncellemeyi Uygula", command=self._apply_available_update)
+        update_menu.add_separator()
+        update_menu.add_command(label="Release Sayfasini Ac", command=self._open_release_page)
+        menu_bar.add_cascade(label="Guncelleme", menu=update_menu)
+
+        about_menu = tk.Menu(menu_bar, tearoff=False)
+        about_menu.add_command(label="Uygulama Hakkinda", command=self._show_about_dialog)
+        menu_bar.add_cascade(label="Hakkinda", menu=about_menu)
+
+        self.root.configure(menu=menu_bar)
 
     def _build_ui(self) -> None:
         container = ttk.Frame(self.root, padding=16)
@@ -152,17 +190,40 @@ class HydrostaticTestApp:
         geometry_frame.grid(row=2, column=0, sticky="ew")
         geometry_frame.columnconfigure(1, weight=1)
         geometry_frame.columnconfigure(3, weight=1)
+        geometry_frame.columnconfigure(5, weight=1)
+
+        ttk.Label(geometry_frame, text="ASME B36.10 NPS").grid(row=0, column=0, sticky="w", pady=6)
+        self.pipe_size_combo = ttk.Combobox(
+            geometry_frame,
+            textvariable=self.geometry_catalog_vars["size_option"],
+            state="readonly",
+            values=get_pipe_size_options(),
+        )
+        self.pipe_size_combo.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=6)
+        self.pipe_size_combo.bind("<<ComboboxSelected>>", self._on_pipe_size_selected)
+
+        ttk.Label(geometry_frame, text="Schedule / Et kalinligi").grid(row=0, column=2, sticky="w", pady=6)
+        self.pipe_schedule_combo = ttk.Combobox(
+            geometry_frame,
+            textvariable=self.geometry_catalog_vars["schedule_option"],
+            state="readonly",
+            values=(),
+        )
+        self.pipe_schedule_combo.grid(row=0, column=3, sticky="ew", padx=(0, 12), pady=6)
+        ttk.Button(geometry_frame, text="Listeden Doldur", command=self._apply_catalog_selection).grid(
+            row=0, column=4, sticky="w", pady=6
+        )
 
         self._add_entry(
             geometry_frame,
-            row=0,
+            row=1,
             label="Dis cap (mm)",
             variable=self.geometry_vars["outside_diameter_mm"],
             field_key="geometry.outside_diameter_mm",
         )
         self._add_entry(
             geometry_frame,
-            row=0,
+            row=1,
             label="Et kalinligi (mm)",
             variable=self.geometry_vars["wall_thickness_mm"],
             field_key="geometry.wall_thickness_mm",
@@ -170,25 +231,67 @@ class HydrostaticTestApp:
         )
         self._add_entry(
             geometry_frame,
-            row=1,
+            row=2,
             label="Hat uzunlugu (m)",
             variable=self.geometry_vars["length_m"],
             field_key="geometry.length_m",
         )
+        segment_actions = ttk.Frame(geometry_frame)
+        segment_actions.grid(row=2, column=2, columnspan=3, sticky="w", pady=6)
+        ttk.Button(segment_actions, text="Segment Ekle", command=self._add_geometry_segment).pack(side="left")
+        ttk.Button(segment_actions, text="Secili Segmenti Sil", command=self._remove_selected_segment).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Button(segment_actions, text="Segmentleri Temizle", command=self._clear_geometry_segments).pack(
+            side="left", padx=(8, 0)
+        )
+
+        segment_frame = ttk.Frame(geometry_frame)
+        segment_frame.grid(row=3, column=0, columnspan=6, sticky="ew", pady=(8, 0))
+        segment_frame.columnconfigure(0, weight=1)
+        self.segment_tree = ttk.Treeview(
+            segment_frame,
+            columns=("segment", "nps", "schedule", "od", "wt", "length"),
+            show="headings",
+            height=5,
+        )
+        self.segment_tree.heading("segment", text="Segment")
+        self.segment_tree.heading("nps", text="NPS / DN")
+        self.segment_tree.heading("schedule", text="Schedule")
+        self.segment_tree.heading("od", text="OD (mm)")
+        self.segment_tree.heading("wt", text="Et (mm)")
+        self.segment_tree.heading("length", text="Uzunluk (m)")
+        self.segment_tree.column("segment", width=70, anchor="center")
+        self.segment_tree.column("nps", width=140, anchor="w")
+        self.segment_tree.column("schedule", width=150, anchor="w")
+        self.segment_tree.column("od", width=90, anchor="e")
+        self.segment_tree.column("wt", width=90, anchor="e")
+        self.segment_tree.column("length", width=100, anchor="e")
+        self.segment_tree.grid(row=0, column=0, sticky="ew")
+        segment_scroll = ttk.Scrollbar(segment_frame, orient="vertical", command=self.segment_tree.yview)
+        segment_scroll.grid(row=0, column=1, sticky="ns")
+        self.segment_tree.configure(yscrollcommand=segment_scroll.set)
         ttk.Label(
             geometry_frame,
             textvariable=self.section_feedback_vars["geometry"],
             foreground="#A4262C",
             wraplength=1140,
             justify="left",
-        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        ).grid(row=4, column=0, columnspan=6, sticky="w", pady=(8, 0))
         ttk.Label(
             geometry_frame,
             textvariable=self.geometry_summary_var,
             wraplength=1140,
             justify="left",
             foreground="#35506B",
-        ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        ).grid(row=5, column=0, columnspan=6, sticky="w", pady=(8, 0))
+        ttk.Label(
+            geometry_frame,
+            textvariable=self.segment_summary_var,
+            wraplength=1140,
+            justify="left",
+            foreground="#35506B",
+        ).grid(row=6, column=0, columnspan=6, sticky="w", pady=(6, 0))
 
         content_pane = ttk.Panedwindow(container, orient="horizontal")
         content_pane.grid(row=3, column=0, sticky="nsew", pady=12)
@@ -954,6 +1057,20 @@ class HydrostaticTestApp:
         self._update_live_notice()
 
     def _refresh_geometry_summary(self) -> None:
+        if self.geometry_segments:
+            try:
+                geometry = PipeGeometry(
+                    sections=tuple(segment_info["pipe"] for segment_info in self.geometry_segments)  # type: ignore[arg-type]
+                )
+            except ValidationError as exc:
+                self.geometry_summary_var.set(f"Segment ozeti hazir degil: {exc}")
+                return
+            self.geometry_summary_var.set(
+                "Segmentli geometri aktif. Esdeger ic yaricap = "
+                f"{geometry.internal_radius_mm:.3f} mm, toplam ic hacim Vt = {geometry.internal_volume_m3:.6f} m3, "
+                f"toplam uzunluk = {geometry.total_length_m:.3f} m"
+            )
+            return
         outside = self._safe_float(self.geometry_vars["outside_diameter_mm"].get())
         wall = self._safe_float(self.geometry_vars["wall_thickness_mm"].get())
         length = self._safe_float(self.geometry_vars["length_m"].get())
@@ -1066,6 +1183,8 @@ class HydrostaticTestApp:
         relevant_fields: set[str] = set()
         for field_key, meta in self.field_meta.items():
             section = meta.get("section")
+            if self.geometry_segments and section == "geometry":
+                continue
             if section not in {"geometry", active_tab}:
                 continue
             if field_key.startswith("helper.") and not self.use_b_helper_var.get():
@@ -1111,6 +1230,124 @@ class HydrostaticTestApp:
     def _format_var_value(self, variable: tk.StringVar) -> str:
         value = variable.get().strip()
         return value if value else "-"
+
+    def _current_geometry_descriptor(self) -> tuple[str, str]:
+        size_label = self.geometry_catalog_vars["size_option"].get().strip()
+        schedule_label = self.geometry_catalog_vars["schedule_option"].get().strip()
+        pipe_size = find_pipe_size(size_label)
+        schedule = find_schedule(size_label, schedule_label)
+        nps_label = "-"
+        schedule_text = "Elle giris"
+        if pipe_size is not None:
+            nps_label = f"NPS {pipe_size['nps']} / DN {pipe_size['dn']}"
+        if schedule is not None:
+            schedule_text = schedule["label"]
+        return nps_label, schedule_text
+
+    def _on_pipe_size_selected(self, _: tk.Event | None = None) -> None:
+        size_label = self.geometry_catalog_vars["size_option"].get().strip()
+        schedule_options = get_schedule_options(size_label)
+        self.pipe_schedule_combo.configure(values=schedule_options)
+        if schedule_options:
+            self.geometry_catalog_vars["schedule_option"].set(schedule_options[0])
+        else:
+            self.geometry_catalog_vars["schedule_option"].set("")
+
+    def _apply_catalog_selection(self) -> None:
+        size_label = self.geometry_catalog_vars["size_option"].get().strip()
+        schedule_label = self.geometry_catalog_vars["schedule_option"].get().strip()
+        pipe_size = find_pipe_size(size_label)
+        schedule = find_schedule(size_label, schedule_label)
+        if pipe_size is None or schedule is None:
+            self._set_banner("Listeden doldurmak icin once NPS ve schedule secin.", "warning")
+            return
+        self.geometry_vars["outside_diameter_mm"].set(f"{pipe_size['outside_diameter_mm']:.2f}")
+        self.geometry_vars["wall_thickness_mm"].set(f"{schedule['wall_thickness_mm']:.2f}")
+        self._set_banner("ASME B36.10 listesinden geometri alanlari dolduruldu.", "success")
+
+    def _build_manual_pipe_section(self, section: str) -> PipeSection:
+        return PipeSection(
+            outside_diameter_mm=self._read_float(
+                self.geometry_vars["outside_diameter_mm"], "Dis cap", section, "geometry.outside_diameter_mm"
+            ),
+            wall_thickness_mm=self._read_float(
+                self.geometry_vars["wall_thickness_mm"], "Et kalinligi", section, "geometry.wall_thickness_mm"
+            ),
+            length_m=self._read_float(
+                self.geometry_vars["length_m"], "Hat uzunlugu", section, "geometry.length_m"
+            ),
+        )
+
+    def _add_geometry_segment(self) -> None:
+        self._clear_feedback("geometry")
+        try:
+            segment = self._build_manual_pipe_section("geometry")
+        except ValidationError as exc:
+            self._set_banner(str(exc), "error")
+            return
+        nps_label, schedule_text = self._current_geometry_descriptor()
+        self.geometry_segments.append(
+            {
+                "pipe": segment,
+                "nps_label": nps_label,
+                "schedule_label": schedule_text,
+            }
+        )
+        self._refresh_segment_tree()
+        self._refresh_geometry_summary()
+        self._set_banner("Geometri segmenti listeye eklendi.", "success")
+
+    def _remove_selected_segment(self) -> None:
+        selected_item = self.segment_tree.selection()
+        if not selected_item:
+            self._set_banner("Silmek icin once bir segment secin.", "warning")
+            return
+        index = int(selected_item[0]) - 1
+        if 0 <= index < len(self.geometry_segments):
+            self.geometry_segments.pop(index)
+            self._refresh_segment_tree()
+            self._refresh_geometry_summary()
+            self._set_banner("Secili segment kaldirildi.", "info")
+
+    def _clear_geometry_segments(self) -> None:
+        self.geometry_segments.clear()
+        self._refresh_segment_tree()
+        self._refresh_geometry_summary()
+        self._set_banner("Segment listesi temizlendi. Ustteki geometri alanlari tekrar aktif referans oldu.", "info")
+
+    def _refresh_segment_tree(self) -> None:
+        if not hasattr(self, "segment_tree"):
+            return
+        for item_id in self.segment_tree.get_children():
+            self.segment_tree.delete(item_id)
+        if not self.geometry_segments:
+            self.segment_summary_var.set(
+                "Segmentasyon kullanilmazsa ustteki geometri alanlari tek boru kesiti olarak kullanilir."
+            )
+            return
+        total_length = 0.0
+        total_volume = 0.0
+        for index, segment_info in enumerate(self.geometry_segments, start=1):
+            pipe = segment_info["pipe"]
+            assert isinstance(pipe, PipeSection)
+            total_length += pipe.length_m
+            total_volume += pipe.internal_volume_m3
+            self.segment_tree.insert(
+                "",
+                "end",
+                iid=str(index),
+                values=(
+                    index,
+                    segment_info["nps_label"],
+                    segment_info["schedule_label"],
+                    f"{pipe.outside_diameter_mm:.2f}",
+                    f"{pipe.wall_thickness_mm:.2f}",
+                    f"{pipe.length_m:.2f}",
+                ),
+            )
+        self.segment_summary_var.set(
+            f"Segment sayisi = {len(self.geometry_segments)}, toplam uzunluk = {total_length:.2f} m, toplam ic hacim = {total_volume:.6f} m3"
+        )
 
     def _on_tab_changed(self, _: tk.Event | None = None) -> None:
         self._update_workflow_hint()
@@ -1245,19 +1482,13 @@ class HydrostaticTestApp:
     def _on_steel_preset_changed(self, _: tk.Event) -> None:
         self.b_helper_vars["steel_alpha_micro_per_c"].set(self._default_steel_alpha())
 
-    def _build_pipe_section(self, section: str) -> PipeSection:
+    def _build_pipe_section(self, section: str) -> PipeSection | PipeGeometry:
         try:
-            return PipeSection(
-                outside_diameter_mm=self._read_float(
-                    self.geometry_vars["outside_diameter_mm"], "Dis cap", section, "geometry.outside_diameter_mm"
-                ),
-                wall_thickness_mm=self._read_float(
-                    self.geometry_vars["wall_thickness_mm"], "Et kalinligi", section, "geometry.wall_thickness_mm"
-                ),
-                length_m=self._read_float(
-                    self.geometry_vars["length_m"], "Hat uzunlugu", section, "geometry.length_m"
-                ),
-            )
+            if self.geometry_segments:
+                return PipeGeometry(
+                    sections=tuple(segment_info["pipe"] for segment_info in self.geometry_segments)  # type: ignore[arg-type]
+                )
+            return self._build_manual_pipe_section(section)
         except ValidationError as exc:
             self._set_feedback("geometry", str(exc))
             raise
@@ -1547,33 +1778,48 @@ class HydrostaticTestApp:
             f"Dis cap (mm): {self._format_var_value(self.geometry_vars['outside_diameter_mm'])}",
             f"Et kalinligi (mm): {self._format_var_value(self.geometry_vars['wall_thickness_mm'])}",
             f"Hat uzunlugu (m): {self._format_var_value(self.geometry_vars['length_m'])}",
+            f"Liste secimi: {self.geometry_catalog_vars['size_option'].get().strip() or '-'}",
+            f"Schedule secimi: {self.geometry_catalog_vars['schedule_option'].get().strip() or '-'}",
             "",
-            "Hava Icerik Testi Girdileri",
-            f"Su sicakligi (degC): {self._format_var_value(self.air_vars['temperature_c'])}",
-            f"Su basinci (bar): {self._format_var_value(self.air_vars['pressure_bar'])}",
-            f"A (10^-6 / bar): {self._format_var_value(self.air_vars['a_micro_per_bar'])}",
-            f"Basinc artisi P (bar): {self._format_var_value(self.air_vars['pressure_rise_bar'])}",
-            f"K faktor: {self._format_var_value(self.air_vars['k_factor'])}",
-            f"Fiili ilave su Vpa (m3): {self._format_var_value(self.air_vars['actual_added_water_m3'])}",
-            "",
-            "Basinc Degisim Testi Girdileri",
-            f"Su sicakligi (degC): {self._format_var_value(self.pressure_vars['temperature_c'])}",
-            f"Su basinci (bar): {self._format_var_value(self.pressure_vars['pressure_bar'])}",
-            f"A (10^-6 / bar): {self._format_var_value(self.pressure_vars['a_micro_per_bar'])}",
-            f"B (10^-6 / degC): {self._format_var_value(self.pressure_vars['b_micro_per_c'])}",
-            f"Su sicaklik degisimi dT (degC): {self._format_var_value(self.pressure_vars['delta_t_c'])}",
-            f"Fiili basinc degisimi Pa (bar): {self._format_var_value(self.pressure_vars['actual_pressure_change_bar'])}",
-            f"B helper modu: {'Acik' if self.use_b_helper_var.get() else 'Kapali'}",
-            f"Celik alpha (10^-6 / degC): {self._format_var_value(self.b_helper_vars['steel_alpha_micro_per_c'])}",
-            f"Su beta (10^-6 / degC): {self._format_var_value(self.b_helper_vars['water_beta_micro_per_c'])}",
-            "",
-            "Nihai Karar",
-            f"Baslik: {self.decision_title_var.get()}",
-            f"Durum: {self.decision_status_var.get()}",
-            f"Ozet: {self.decision_summary_var.get()}",
-            "",
-            "Oturum Sonuclari",
         ]
+        if self.geometry_segments:
+            lines.extend(["Segment Listesi"])
+            for index, segment_info in enumerate(self.geometry_segments, start=1):
+                pipe = segment_info["pipe"]
+                assert isinstance(pipe, PipeSection)
+                lines.append(
+                    f"{index}. {segment_info['nps_label']} | {segment_info['schedule_label']} | OD {pipe.outside_diameter_mm:.2f} mm | Et {pipe.wall_thickness_mm:.2f} mm | L {pipe.length_m:.2f} m"
+                )
+            lines.append("")
+        lines.extend(
+            [
+                "Hava Icerik Testi Girdileri",
+                f"Su sicakligi (degC): {self._format_var_value(self.air_vars['temperature_c'])}",
+                f"Su basinci (bar): {self._format_var_value(self.air_vars['pressure_bar'])}",
+                f"A (10^-6 / bar): {self._format_var_value(self.air_vars['a_micro_per_bar'])}",
+                f"Basinc artisi P (bar): {self._format_var_value(self.air_vars['pressure_rise_bar'])}",
+                f"K faktor: {self._format_var_value(self.air_vars['k_factor'])}",
+                f"Fiili ilave su Vpa (m3): {self._format_var_value(self.air_vars['actual_added_water_m3'])}",
+                "",
+                "Basinc Degisim Testi Girdileri",
+                f"Su sicakligi (degC): {self._format_var_value(self.pressure_vars['temperature_c'])}",
+                f"Su basinci (bar): {self._format_var_value(self.pressure_vars['pressure_bar'])}",
+                f"A (10^-6 / bar): {self._format_var_value(self.pressure_vars['a_micro_per_bar'])}",
+                f"B (10^-6 / degC): {self._format_var_value(self.pressure_vars['b_micro_per_c'])}",
+                f"Su sicaklik degisimi dT (degC): {self._format_var_value(self.pressure_vars['delta_t_c'])}",
+                f"Fiili basinc degisimi Pa (bar): {self._format_var_value(self.pressure_vars['actual_pressure_change_bar'])}",
+                f"B helper modu: {'Acik' if self.use_b_helper_var.get() else 'Kapali'}",
+                f"Celik alpha (10^-6 / degC): {self._format_var_value(self.b_helper_vars['steel_alpha_micro_per_c'])}",
+                f"Su beta (10^-6 / degC): {self._format_var_value(self.b_helper_vars['water_beta_micro_per_c'])}",
+                "",
+                "Nihai Karar",
+                f"Baslik: {self.decision_title_var.get()}",
+                f"Durum: {self.decision_status_var.get()}",
+                f"Ozet: {self.decision_summary_var.get()}",
+                "",
+                "Oturum Sonuclari",
+            ]
+        )
         if self.report_entries:
             lines.extend(self.report_entries)
         else:
@@ -1608,6 +1854,18 @@ class HydrostaticTestApp:
 
         self._set_banner("Rapor basariyla kaydedildi.", "success")
         messagebox.showinfo("Kaydedildi", f"Rapor kaydedildi:\n{file_path}")
+
+    def _show_about_dialog(self) -> None:
+        messagebox.showinfo(
+            "Hakkinda",
+            (
+                f"{APP_NAME}\n"
+                f"Surum: {APP_VERSION}\n\n"
+                "Bu uygulama hidrostatik test degerlendirmesi icin gelistirildi.\n"
+                "Geometri manuel girilebilir, ASME B36.10 katalog listesinden secilebilir\n"
+                "ve farkli et kalinliklarina sahip segmentler birlikte modellenebilir."
+            ),
+        )
 
 
 def main() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import pi
-from typing import Final
+from typing import Final, TypeAlias
 
 from CoolProp.CoolProp import PropsSI
 
@@ -48,6 +48,42 @@ class PipeSection:
     @property
     def elasticity_term(self) -> float:
         return 0.884 * self.internal_radius_mm / self.wall_thickness_mm
+
+
+@dataclass(frozen=True)
+class PipeGeometry:
+    sections: tuple[PipeSection, ...]
+
+    def __post_init__(self) -> None:
+        if not self.sections:
+            raise ValidationError("En az bir boru segmenti tanimlanmalidir.")
+
+    @property
+    def total_length_m(self) -> float:
+        return sum(section.length_m for section in self.sections)
+
+    @property
+    def internal_volume_m3(self) -> float:
+        return sum(section.internal_volume_m3 for section in self.sections)
+
+    @property
+    def internal_radius_mm(self) -> float:
+        total_volume = self.internal_volume_m3
+        if total_volume <= FLOAT_TOLERANCE:
+            raise ValidationError("Segmentlerden toplam hacim hesaplanamadi.")
+        return sum(
+            section.internal_radius_mm * section.internal_volume_m3 for section in self.sections
+        ) / total_volume
+
+    @property
+    def elasticity_term(self) -> float:
+        total_volume = self.internal_volume_m3
+        if total_volume <= FLOAT_TOLERANCE:
+            raise ValidationError("Segmentlerden toplam hacim hesaplanamadi.")
+        return sum(section.elasticity_term * section.internal_volume_m3 for section in self.sections) / total_volume
+
+
+PipeModel: TypeAlias = PipeSection | PipeGeometry
 
 
 def scale_isothermal_compressibility_pa_to_micro_per_bar(value_pa_inverse: float) -> float:
@@ -126,7 +162,7 @@ def calculate_b_coefficient(
 
 @dataclass(frozen=True)
 class AirContentInputs:
-    pipe: PipeSection
+    pipe: PipeModel
     a_micro_per_bar: float
     pressure_rise_bar: float
     k_factor: float
@@ -182,7 +218,7 @@ def evaluate_air_content_test(inputs: AirContentInputs) -> AirContentResult:
 
 @dataclass(frozen=True)
 class PressureVariationInputs:
-    pipe: PipeSection
+    pipe: PipeModel
     a_micro_per_bar: float
     b_micro_per_c: float
     delta_t_c: float

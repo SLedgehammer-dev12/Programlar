@@ -64,6 +64,45 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertIn("Ic cap", self.app.geometry_summary_var.get())
         self.assertIn("ic hacim Vt", self.app.geometry_summary_var.get())
 
+    def test_catalog_selection_populates_geometry_fields(self) -> None:
+        size_label = next(option for option in self.app.pipe_size_combo.cget("values") if option.startswith("NPS 16 "))
+        self.app.geometry_catalog_vars["size_option"].set(size_label)
+        self.app._on_pipe_size_selected()
+        schedule_label = next(
+            option for option in self.app.pipe_schedule_combo.cget("values") if "40 / XS" in option
+        )
+        self.app.geometry_catalog_vars["schedule_option"].set(schedule_label)
+
+        self.app._apply_catalog_selection()
+
+        self.assertEqual(self.app.geometry_vars["outside_diameter_mm"].get(), "406.40")
+        self.assertEqual(self.app.geometry_vars["wall_thickness_mm"].get(), "12.70")
+
+    def test_segment_addition_switches_geometry_to_segment_mode(self) -> None:
+        self.app.geometry_vars["outside_diameter_mm"].set("406.4")
+        self.app.geometry_vars["wall_thickness_mm"].set("8.74")
+        self.app.geometry_vars["length_m"].set("500")
+        self.app._add_geometry_segment()
+        self.app.geometry_vars["wall_thickness_mm"].set("12.70")
+        self.app._add_geometry_segment()
+
+        geometry = self.app._build_pipe_section("air")
+
+        self.assertIn("Segmentli geometri aktif", self.app.geometry_summary_var.get())
+        self.assertEqual(len(self.app.segment_tree.get_children()), 2)
+        self.assertGreater(geometry.internal_volume_m3, 0.0)
+
+    def test_menu_bar_contains_expected_sections(self) -> None:
+        menu = self.root.nametowidget(self.root["menu"])
+
+        labels = [
+            menu.entrycget(index, "label")
+            for index in range(menu.index("end") + 1)
+            if menu.type(index) == "cascade"
+        ]
+
+        self.assertEqual(labels, ["Dosya", "Rapor", "Guncelleme", "Hakkinda"])
+
     def test_clear_active_form_resets_pressure_inputs(self) -> None:
         self.app.notebook.select(1)
         self.app.pressure_vars["temperature_c"].set("20")

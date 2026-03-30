@@ -5,6 +5,7 @@ from math import isclose
 
 from hydrotest_core import (
     AirContentInputs,
+    PipeGeometry,
     PipeSection,
     PressureVariationInputs,
     ValidationError,
@@ -28,6 +29,22 @@ class PipeSectionTests(unittest.TestCase):
     def test_invalid_wall_thickness_raises_validation_error(self) -> None:
         with self.assertRaises(ValidationError):
             PipeSection(outside_diameter_mm=100, wall_thickness_mm=60, length_m=10)
+
+    def test_segmented_geometry_aggregates_length_volume_and_elasticity(self) -> None:
+        geometry = PipeGeometry(
+            sections=(
+                PipeSection(outside_diameter_mm=406.4, wall_thickness_mm=8.74, length_m=500),
+                PipeSection(outside_diameter_mm=406.4, wall_thickness_mm=12.7, length_m=500),
+            )
+        )
+
+        self.assertTrue(isclose(geometry.total_length_m, 1000.0, rel_tol=1e-12))
+        self.assertGreater(geometry.internal_volume_m3, 0.0)
+        self.assertGreater(geometry.elasticity_term, 0.0)
+        self.assertLess(
+            geometry.elasticity_term,
+            PipeSection(outside_diameter_mm=406.4, wall_thickness_mm=8.74, length_m=1000).elasticity_term,
+        )
 
 
 class AirContentTests(unittest.TestCase):

@@ -17,6 +17,8 @@
 - [x] Windows icin standalone `.exe` build al.
 - [x] GitHub release'e uygun paketleme akisini kur.
 - [x] Acilista ve manuel tetiklenen guncelleme kontrol akisini ekle.
+- [x] ASME B36.10 secim listesi ve segmentli geometri modelini ekle.
+- [x] Ust menu yapisini Dosya, Rapor, Guncelleme ve Hakkinda basliklariyla kur.
 - [ ] ASME B31.8 tam madde veya sirket proseduru ile nihai dogrulama yap.
 - [ ] 24 saatlik kayit, log ve rapor uretim akisini tasarla.
 - [ ] Authenticode kod imzalama ve kurumsal dagitim hazirligi yap.
@@ -33,7 +35,10 @@
 - Acilista otomatik guncelleme kontrolu ve manuel kontrol butonlari eklendi.
 - Windows `.exe` icin indir-uygula-yeniden baslat akisi eklendi.
 - Repo-ozel `hidrostatik-test-v*` tag duzeni ve monorepo release workflow dosyasi eklendi.
-- UI ve cekirdek testleri 27 teste cikarildi.
+- ASME B36.10 tabanli cap ve et kalinligi katalogu eklendi.
+- Segmentli geometri modeli ile farkli et kalinliklari ayni hatta birlestirildi.
+- Ust menu yapisi `Dosya`, `Rapor`, `Guncelleme`, `Hakkinda` olarak kuruldu.
+- UI ve cekirdek testleri 33 teste cikarildi.
 - `app_metadata.py`, manifest, requirements ve release dokumanlari eklendi.
 - `build_exe.ps1` benzersiz build klasorleri ve retry'li zip arsivleme ile guclendirildi.
 - Windows release artefact'lari yerel olarak uretildi.
@@ -41,12 +46,12 @@
 
 ## Dogrulama Kaydi
 
-- `python -m unittest discover -s "d:\Program\Python USB\Hidrostatik_Test" -p "test_*.py"` -> 27 test gecti.
-- `python -c "import sys; sys.path.insert(0, r'd:\Program\Python USB\Hidrostatik_Test'); import Hidrostatik_Test_Chat; import hydrotest_core; import updater; import app_metadata; print('import-ok')"` -> basarili.
+- `python -m unittest discover -s "d:\Program\Python USB\Hidrostatik_Test" -p "test_*.py"` -> 33 test gecti.
+- `python -c "import sys; sys.path.insert(0, r'd:\Program\Python USB\Hidrostatik_Test'); import Hidrostatik_Test_Chat; import hydrotest_core; import pipe_catalog; import updater; import app_metadata; print('import-ok')"` -> basarili.
 - `powershell -ExecutionPolicy Bypass -File .\build_exe.ps1` -> basarili.
-- `release\HidrostatikTest-v1.2.0-windows-x64.zip` -> build sonrasi beklenen artefact.
-- `release\HidrostatikTest-v1.2.0-windows-x64.sha256.txt` -> build sonrasi beklenen artefact.
-- `release\HidrostatikTest-v1.2.0-windows-x64-RELEASE-NOTES.md` -> build sonrasi beklenen artefact.
+- `release\HidrostatikTest-v1.3.0-windows-x64.zip` -> build sonrasi beklenen artefact.
+- `release\HidrostatikTest-v1.3.0-windows-x64.sha256.txt` -> build sonrasi beklenen artefact.
+- `release\HidrostatikTest-v1.3.0-windows-x64-RELEASE-NOTES.md` -> build sonrasi beklenen artefact.
 
 ## Definition of Done
 
