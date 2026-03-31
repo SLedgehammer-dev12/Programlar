@@ -52,29 +52,39 @@ class AirContentTests(unittest.TestCase):
         inputs = AirContentInputs(
             pipe=PipeSection(outside_diameter_mm=406.4, wall_thickness_mm=8.74, length_m=1000),
             a_micro_per_bar=45.0,
-            pressure_rise_bar=70.0,
+            pressure_rise_bar=1.0,
             k_factor=1.02,
-            actual_added_water_m3=0.55,
+            actual_added_water_m3=0.0079,
         )
 
         result = evaluate_air_content_test(inputs)
 
         self.assertTrue(result.passed)
-        self.assertTrue(isclose(result.theoretical_added_water_m3, 0.5485312776361229, rel_tol=1e-9))
-        self.assertTrue(isclose(result.acceptance_limit_m3, 0.5814431542942903, rel_tol=1e-9))
+        self.assertTrue(isclose(result.theoretical_added_water_m3, 0.00783616110908747, rel_tol=1e-9))
+        self.assertTrue(isclose(result.acceptance_limit_m3, 0.008306330775632718, rel_tol=1e-9))
 
     def test_air_content_fail_case(self) -> None:
         inputs = AirContentInputs(
             pipe=PipeSection(outside_diameter_mm=406.4, wall_thickness_mm=8.74, length_m=1000),
             a_micro_per_bar=45.0,
-            pressure_rise_bar=70.0,
+            pressure_rise_bar=1.0,
             k_factor=1.02,
-            actual_added_water_m3=0.70,
+            actual_added_water_m3=0.0085,
         )
 
         result = evaluate_air_content_test(inputs)
 
         self.assertFalse(result.passed)
+
+    def test_air_content_requires_one_bar_pressure_rise(self) -> None:
+        with self.assertRaises(ValidationError):
+            AirContentInputs(
+                pipe=PipeSection(outside_diameter_mm=406.4, wall_thickness_mm=8.74, length_m=1000),
+                a_micro_per_bar=45.0,
+                pressure_rise_bar=0.8,
+                k_factor=1.02,
+                actual_added_water_m3=0.0079,
+            )
 
 
 class PressureVariationTests(unittest.TestCase):
@@ -121,10 +131,23 @@ class BCoefficientTests(unittest.TestCase):
     def test_b_coefficient_is_water_minus_steel(self) -> None:
         self.assertTrue(isclose(calculate_b_coefficient(218.29719116700636, 12.0), 206.29719116700636))
 
-    def test_water_thermal_expansion_from_coolprop_is_in_expected_range(self) -> None:
-        beta = calculate_water_thermal_expansion_beta(temp_c=20.0, pressure_bar=80.0)
-        self.assertGreater(beta, 200.0)
-        self.assertLess(beta, 230.0)
+    def test_water_property_reference_points_match_iapws95_cross_check(self) -> None:
+        # Reference values were cross-checked against an independent IAPWS-95 implementation.
+        reference_points = (
+            (10.0, 50.0, 47.193088967078, 99.621630836736, 87.621630836736),
+            (15.0, 80.0, 45.786845210898, 165.612819003945, 153.612819003945),
+            (20.0, 100.0, 44.744088115012, 221.153338084596, 209.153338084596),
+        )
+
+        for temp_c, pressure_bar, expected_a, expected_beta, expected_b in reference_points:
+            with self.subTest(temp_c=temp_c, pressure_bar=pressure_bar):
+                a_value = calculate_water_compressibility_a(temp_c=temp_c, pressure_bar=pressure_bar)
+                beta_value = calculate_water_thermal_expansion_beta(temp_c=temp_c, pressure_bar=pressure_bar)
+                b_value = calculate_b_coefficient(beta_value, 12.0)
+
+                self.assertTrue(isclose(a_value, expected_a, rel_tol=1e-9))
+                self.assertTrue(isclose(beta_value, expected_beta, rel_tol=1e-9))
+                self.assertTrue(isclose(b_value, expected_b, rel_tol=1e-9))
 
 
 class WaterPropertyValidationTests(unittest.TestCase):

@@ -266,6 +266,7 @@ if (-not $SkipTests) {
     & $PythonExe -m py_compile `
         (Join-Path $projectRoot "Hidrostatik_Test_Chat.py") `
         (Join-Path $projectRoot "hydrotest_core.py") `
+        (Join-Path $projectRoot "coefficient_reference.py") `
         (Join-Path $projectRoot "pipe_catalog.py") `
         (Join-Path $projectRoot "updater.py") `
         (Join-Path $projectRoot "test_hydrotest_core.py") `

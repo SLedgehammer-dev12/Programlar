@@ -8,6 +8,8 @@ from CoolProp.CoolProp import PropsSI
 
 AIR_CONTENT_ACCEPTANCE_FACTOR: Final[float] = 1.06
 PRESSURE_VARIATION_ACCEPTANCE_BAR: Final[float] = 0.3
+SPEC_AIR_PRESSURE_RISE_BAR: Final[float] = 1.0
+SPEC_AIR_PRESSURE_RISE_TOLERANCE: Final[float] = 1e-9
 SEAMLESS_PIPE_K: Final[float] = 1.00
 WELDED_PIPE_K: Final[float] = 1.02
 MICRO_BAR_INVERSE_PER_PA_INVERSE: Final[float] = 1e11
@@ -28,13 +30,13 @@ class PipeSection:
 
     def __post_init__(self) -> None:
         if self.outside_diameter_mm <= 0:
-            raise ValidationError("Dış çap sıfırdan büyük olmalıdır.")
+            raise ValidationError("Dis cap sifirdan buyuk olmalidir.")
         if self.wall_thickness_mm <= 0:
-            raise ValidationError("Et kalınlığı sıfırdan büyük olmalıdır.")
+            raise ValidationError("Et kalinligi sifirdan buyuk olmalidir.")
         if self.length_m <= 0:
-            raise ValidationError("Hat uzunluğu sıfırdan büyük olmalıdır.")
+            raise ValidationError("Hat uzunlugu sifirdan buyuk olmalidir.")
         if self.wall_thickness_mm * 2 >= self.outside_diameter_mm:
-            raise ValidationError("Et kalınlığı borunun iç çapını sıfıra düşürecek kadar büyük olamaz.")
+            raise ValidationError("Et kalinligi borunun ic capini sifira dusurecek kadar buyuk olamaz.")
 
     @property
     def internal_radius_mm(self) -> float:
@@ -88,7 +90,7 @@ PipeModel: TypeAlias = PipeSection | PipeGeometry
 
 def scale_isothermal_compressibility_pa_to_micro_per_bar(value_pa_inverse: float) -> float:
     if value_pa_inverse <= 0:
-        raise ValidationError("İzotermal sıkıştırılabilirlik pozitif olmalıdır.")
+        raise ValidationError("Izotermal sikistirilabilirlik pozitif olmalidir.")
     return value_pa_inverse * MICRO_BAR_INVERSE_PER_PA_INVERSE
 
 
@@ -100,9 +102,9 @@ def scale_expansion_coefficient_k_to_micro_per_c(value_k_inverse: float) -> floa
 
 def calculate_water_compressibility_a(temp_c: float, pressure_bar: float) -> float:
     if temp_c <= ABSOLUTE_ZERO_C:
-        raise ValidationError("Sıcaklık mutlak sıfırın altında olamaz.")
+        raise ValidationError("Sicaklik mutlak sifirin altinda olamaz.")
     if pressure_bar <= 0:
-        raise ValidationError("Basınç sıfırdan büyük olmalıdır.")
+        raise ValidationError("Basinc sifirdan buyuk olmalidir.")
 
     kelvin = temp_c + 273.15
     pascal = pressure_bar * 1e5
@@ -117,7 +119,7 @@ def calculate_water_compressibility_a(temp_c: float, pressure_bar: float) -> flo
             "Water",
         )
     except ValueError as exc:
-        raise ValidationError(f"A hesaplanamadı: {exc}") from exc
+        raise ValidationError(f"A hesaplanamadi: {exc}") from exc
 
     return scale_isothermal_compressibility_pa_to_micro_per_bar(compressibility_pa_inverse)
 
@@ -170,11 +172,13 @@ class AirContentInputs:
 
     def __post_init__(self) -> None:
         if self.a_micro_per_bar <= 0:
-            raise ValidationError("A değeri sıfırdan büyük olmalıdır.")
+            raise ValidationError("A degeri sifirdan buyuk olmalidir.")
         if self.pressure_rise_bar <= 0:
-            raise ValidationError("Basınç artışı P sıfırdan büyük olmalıdır.")
+            raise ValidationError("Basinc artisi P sifirdan buyuk olmalidir.")
+        if abs(self.pressure_rise_bar - SPEC_AIR_PRESSURE_RISE_BAR) > SPEC_AIR_PRESSURE_RISE_TOLERANCE:
+            raise ValidationError("Hava icerik testi bu sartnameye gore tam 1.0 bar basinc artisi ile yapilmalidir.")
         if self.k_factor <= 0:
-            raise ValidationError("K faktörü sıfırdan büyük olmalıdır.")
+            raise ValidationError("K faktoru sifirdan buyuk olmalidir.")
         if self.actual_added_water_m3 < 0:
             raise ValidationError("Fiili ilave su hacmi negatif olamaz.")
 
@@ -191,7 +195,7 @@ class AirContentResult:
 def evaluate_air_content_test(inputs: AirContentInputs) -> AirContentResult:
     deformation_term = inputs.pipe.elasticity_term + inputs.a_micro_per_bar
     if deformation_term <= 0:
-        raise ValidationError("Hava içerik hesabı için payda/çarpan pozitif olmalıdır.")
+        raise ValidationError("Hava icerik hesabi icin payda/carpan pozitif olmalidir.")
 
     theoretical_added_water_m3 = (
         deformation_term
@@ -201,7 +205,7 @@ def evaluate_air_content_test(inputs: AirContentInputs) -> AirContentResult:
         * inputs.k_factor
     )
     if theoretical_added_water_m3 <= FLOAT_TOLERANCE:
-        raise ValidationError("Teorik su ilavesi hesaplanamadı.")
+        raise ValidationError("Teorik su ilavesi hesaplanamadi.")
 
     acceptance_limit_m3 = theoretical_added_water_m3 * AIR_CONTENT_ACCEPTANCE_FACTOR
     ratio = inputs.actual_added_water_m3 / theoretical_added_water_m3
@@ -226,9 +230,9 @@ class PressureVariationInputs:
 
     def __post_init__(self) -> None:
         if self.a_micro_per_bar <= 0:
-            raise ValidationError("A değeri sıfırdan büyük olmalıdır.")
+            raise ValidationError("A degeri sifirdan buyuk olmalidir.")
         if self.b_micro_per_c <= 0:
-            raise ValidationError("B değeri sıfırdan büyük olmalıdır.")
+            raise ValidationError("B degeri sifirdan buyuk olmalidir.")
 
 
 @dataclass(frozen=True)
@@ -243,7 +247,7 @@ class PressureVariationResult:
 def evaluate_pressure_variation_test(inputs: PressureVariationInputs) -> PressureVariationResult:
     deformation_term = inputs.pipe.elasticity_term + inputs.a_micro_per_bar
     if deformation_term <= 0:
-        raise ValidationError("Basınç değişim hesabı için payda pozitif olmalıdır.")
+        raise ValidationError("Basinc degisim hesabi icin payda pozitif olmalidir.")
 
     theoretical_pressure_change_bar = (inputs.b_micro_per_c * inputs.delta_t_c) / deformation_term
     allowable_upper_pressure_change_bar = (

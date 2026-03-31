@@ -5,6 +5,8 @@
 Bu uygulama, dogal gaz boru hatti hidrostatik test verilerini masaustu arayuz
 uzerinden degerlendirmek icin gelistirilmis bir Windows uygulamasidir.
 Tkinter tabanli arayuz ile hesap motoru birbirinden ayrilmistir.
+Mevcut hesap ve veri giris akisi `4-NGTL 0-GN-P-002-5007 R4 Hidrostatik Test ve Icten Denetleme Sartnamesi`
+ile hizalanmistir.
 
 ## Mevcut Durum
 
@@ -12,11 +14,14 @@ Tkinter tabanli arayuz ile hesap motoru birbirinden ayrilmistir.
 - Hesap cekirdegi `hydrotest_core.py` icinde tutuluyor.
 - UI durum yonetimi ve raporlama `Hidrostatik_Test_Chat.py` icinde.
 - Boru geometrisi manuel girilebildigi gibi ASME B36.10 listesinden NPS ve schedule secilerek doldurulabiliyor.
+- B36.10 tablosunda schedule adi olmayan ara et kalinliklari da `WT ... mm (B36.10)` secenegi olarak listeleniyor.
 - Birden fazla et kalinligina sahip segmentler ayni hat icinde birlikte modellenebiliyor.
 - Ust menu yapisi `Dosya`, `Rapor`, `Guncelleme` ve `Hakkinda` basliklariyla duzenlendi.
 - Acilista otomatik guncelleme kontrolu ve manuel guncelleme kontrolu eklendi.
+- Python TLS zinciri sorun cikardiginda updater Windows PowerShell fallback'i ile release kontrolune devam ediyor.
 - Uygun release bulundugunda Windows `.exe` paketi kendini guncelleyebiliyor.
-- Otomatik test paketi 33 test ile calisiyor.
+- `A` ve `B` katsayilari icin otomatik, manuel ve referans nokta modlari destekleniyor.
+- Otomatik test paketi 42 test ile calisiyor.
 - Windows one-dir release paketi `build_exe.ps1` ile uretiliyor.
 - GitHub release icin `.zip`, `.sha256.txt` ve release note dosyalari uretiliyor.
 
@@ -45,6 +50,7 @@ Tkinter tabanli arayuz ile hesap motoru birbirinden ayrilmistir.
 - `windows_manifest.xml`: Windows manifest tanimi
 - `requirements.txt`: runtime bagimliliklari
 - `requirements-dev.txt`: build ve gelistirme bagimliliklari
+- `NGTL_5007_Validation.md`: sartname hizalama, A/B katsayi dogrulamasi ve updater analiz notlari
 - `Tests.md`: test ve dogrulama protokolu
 - `Release.md`: GitHub release akis dokumani
 - `todo.md`: teknik durum ve acik maddeler

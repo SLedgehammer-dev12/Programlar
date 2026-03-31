@@ -2,10 +2,12 @@ from __future__ import annotations
 
 APP_NAME = "Hidrostatik Test Degerlendirme"
 APP_TITLE = "Hidrostatik Test Degerlendirme"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.5.1"
 BINARY_NAME = "HidrostatikTest"
 PUBLISHER_NAME = "Hidrostatik Test Project"
 COPYRIGHT_NOTICE = "Copyright (c) 2026"
+SPEC_DOCUMENT_CODE = "4-NGTL 0-GN-P-002-5007 R4"
+SPEC_DOCUMENT_TITLE = "Hidrostatik Test ve Icten Denetleme Sartnamesi"
 GITHUB_OWNER = "SLedgehammer-dev12"
 GITHUB_REPO = "Programlar"
 RELEASE_TAG_PREFIX = "hidrostatik-test-v"

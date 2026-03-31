@@ -25,6 +25,7 @@ from app_metadata import (
 )
 
 DEFAULT_TIMEOUT_SECONDS = 10
+POWERSHELL_JSON_DEPTH = 32
 
 
 class UpdateError(RuntimeError):
@@ -128,21 +129,112 @@ def _select_latest_release(releases: list[dict[str, Any]]) -> dict[str, Any]:
     return matching_releases[0]
 
 
-def fetch_latest_update_info(timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> UpdateInfo:
-    request = Request(
-        RELEASES_API_URL,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": f"{BINARY_NAME}-updater/{APP_VERSION}",
-        },
+def _build_headers(accept: str) -> dict[str, str]:
+    return {
+        "Accept": accept,
+        "User-Agent": f"{BINARY_NAME}-updater/{APP_VERSION}",
+    }
+
+
+def _powershell_literal(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _powershell_headers_block(headers: dict[str, str]) -> str:
+    lines = ["$headers = @{}"]
+    for key, value in headers.items():
+        lines.append(
+            f"$headers['{_powershell_literal(key)}'] = '{_powershell_literal(value)}'"
+        )
+    return "\n".join(lines)
+
+
+def _run_powershell(script: str, timeout_seconds: int) -> str:
+    wrapped_script = "\n".join(
+        [
+            "$ErrorActionPreference = 'Stop'",
+            "$ProgressPreference = 'SilentlyContinue'",
+            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+            "$OutputEncoding = [System.Text.Encoding]::UTF8",
+            script,
+        ]
     )
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", wrapped_script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise UpdateError("PowerShell ag cagrisi zaman asimina ugradi.") from exc
+
+    if completed.returncode != 0:
+        message = completed.stderr.strip() or completed.stdout.strip() or "PowerShell komutu basarisiz oldu."
+        raise UpdateError(message)
+    return completed.stdout
+
+
+def _load_json_via_powershell(url: str, headers: dict[str, str], timeout_seconds: int) -> Any:
+    script = "\n".join(
+        [
+            _powershell_headers_block(headers),
+            (
+                f"$response = Invoke-RestMethod -Uri '{_powershell_literal(url)}' "
+                f"-Headers $headers -TimeoutSec {timeout_seconds}"
+            ),
+            f"$response | ConvertTo-Json -Depth {POWERSHELL_JSON_DEPTH} -Compress",
+        ]
+    )
+    raw_output = _run_powershell(script, timeout_seconds).strip()
+    if not raw_output:
+        raise UpdateError("PowerShell bos bir release cevabi dondurdu.")
+    try:
+        return json.loads(raw_output)
+    except json.JSONDecodeError as exc:
+        raise UpdateError("PowerShell release cevabi JSON olarak okunamadi.") from exc
+
+
+def _download_via_powershell(
+    url: str,
+    headers: dict[str, str],
+    target_path: Path,
+    timeout_seconds: int,
+) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    script = "\n".join(
+        [
+            _powershell_headers_block(headers),
+            (
+                f"Invoke-WebRequest -Uri '{_powershell_literal(url)}' "
+                f"-Headers $headers -OutFile '{_powershell_literal(str(target_path))}' "
+                f"-TimeoutSec {timeout_seconds}"
+            ),
+        ]
+    )
+    _run_powershell(script, timeout_seconds)
+    if not target_path.exists() or target_path.stat().st_size <= 0:
+        raise UpdateError("PowerShell indirmesi bos bir dosya olusturdu.")
+
+
+def fetch_latest_update_info(timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> UpdateInfo:
+    headers = _build_headers("application/vnd.github+json")
+    request = Request(RELEASES_API_URL, headers=headers)
+
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         raise UpdateError(f"GitHub release bilgisi okunamadi: HTTP {exc.code}") from exc
-    except URLError as exc:
-        raise UpdateError("GitHub release servisine ulasilamadi.") from exc
+    except URLError:
+        try:
+            payload = _load_json_via_powershell(RELEASES_API_URL, headers, timeout_seconds)
+        except UpdateError as fallback_exc:
+            raise UpdateError(
+                "GitHub release servisine ulasilamadi. Python TLS dogrulamasi ve Windows fallback denemesi basarisiz oldu."
+            ) from fallback_exc
     except json.JSONDecodeError as exc:
         raise UpdateError("GitHub release cevabi okunamadi.") from exc
 
@@ -182,13 +274,8 @@ def open_release_page(url: str | None = None) -> None:
 
 
 def _download_asset(asset: ReleaseAsset, target_path: Path, timeout_seconds: int) -> None:
-    request = Request(
-        asset.download_url,
-        headers={
-            "Accept": "application/octet-stream",
-            "User-Agent": f"{BINARY_NAME}-updater/{APP_VERSION}",
-        },
-    )
+    headers = _build_headers("application/octet-stream")
+    request = Request(asset.download_url, headers=headers)
     try:
         with urlopen(request, timeout=timeout_seconds) as response, target_path.open("wb") as output:
             while True:
@@ -198,8 +285,15 @@ def _download_asset(asset: ReleaseAsset, target_path: Path, timeout_seconds: int
                 output.write(chunk)
     except HTTPError as exc:
         raise UpdateError(f"Release paketi indirilemedi: HTTP {exc.code}") from exc
-    except URLError as exc:
-        raise UpdateError("Release paketi indirilemedi.") from exc
+    except URLError:
+        try:
+            if target_path.exists():
+                target_path.unlink()
+            _download_via_powershell(asset.download_url, headers, target_path, timeout_seconds)
+        except UpdateError as fallback_exc:
+            raise UpdateError(
+                "Release paketi indirilemedi. Python TLS dogrulamasi ve Windows fallback denemesi basarisiz oldu."
+            ) from fallback_exc
 
 
 def _find_extracted_app_dir(extract_root: Path) -> Path:

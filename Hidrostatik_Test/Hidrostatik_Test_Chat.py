@@ -7,7 +7,15 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
-from app_metadata import APP_NAME, APP_TITLE, APP_VERSION, RELEASES_PAGE_URL
+from app_metadata import (
+    APP_NAME,
+    APP_TITLE,
+    APP_VERSION,
+    RELEASES_PAGE_URL,
+    SPEC_DOCUMENT_CODE,
+    SPEC_DOCUMENT_TITLE,
+)
+from coefficient_reference import find_reference_point, get_reference_option_labels
 from hydrotest_core import (
     SEAMLESS_PIPE_K,
     WELDED_PIPE_K,
@@ -30,6 +38,12 @@ DEFAULT_DECISION_STATUS = "BEKLIYOR"
 DEFAULT_DECISION_SUMMARY = (
     "Girdileri tamamlayip ilgili testi calistirdiginizde nihai karar burada gosterilecek."
 )
+AUTO_A_MODE = "Otomatik - Su ozelliginden hesapla"
+REFERENCE_A_MODE = "Referans - Hazir dogrulanmis nokta"
+MANUAL_A_MODE = "Manuel - Tablo/prosedur degeri gir"
+AUTO_B_MODE = "Otomatik - Su beta ve celik alpha"
+REFERENCE_B_MODE = "Referans - Hazir dogrulanmis nokta"
+MANUAL_B_MODE = "Manuel - Tablo/prosedur degeri gir"
 
 
 class HydrostaticTestApp:
@@ -52,7 +66,7 @@ class HydrostaticTestApp:
             "temperature_c": tk.StringVar(),
             "pressure_bar": tk.StringVar(),
             "a_micro_per_bar": tk.StringVar(),
-            "pressure_rise_bar": tk.StringVar(),
+            "pressure_rise_bar": tk.StringVar(value="1.0"),
             "k_factor": tk.StringVar(value=f"{WELDED_PIPE_K:.2f}"),
             "actual_added_water_m3": tk.StringVar(),
         }
@@ -64,6 +78,12 @@ class HydrostaticTestApp:
             "delta_t_c": tk.StringVar(),
             "actual_pressure_change_bar": tk.StringVar(),
         }
+        self.air_a_mode_var = tk.StringVar(value=AUTO_A_MODE)
+        self.pressure_a_mode_var = tk.StringVar(value=AUTO_A_MODE)
+        self.pressure_b_mode_var = tk.StringVar(value=AUTO_B_MODE)
+        self.air_a_reference_var = tk.StringVar()
+        self.pressure_a_reference_var = tk.StringVar()
+        self.pressure_b_reference_var = tk.StringVar()
         self.k_preset_var = tk.StringVar(value="Kaynakli boru - 1.02")
         self.steel_preset_var = tk.StringVar(value="Karbon celik - 12.0")
         self.use_b_helper_var = tk.BooleanVar(value=True)
@@ -126,6 +146,8 @@ class HydrostaticTestApp:
         self._refresh_coefficient_statuses()
         self._refresh_geometry_summary()
         self._update_workflow_hint()
+        self._on_air_a_mode_changed()
+        self._on_pressure_a_mode_changed()
         self._apply_b_helper_mode()
         self.root.after(1200, self._check_for_updates_on_startup)
 
@@ -167,7 +189,8 @@ class HydrostaticTestApp:
             text=(
                 "Bu arayuz, hidrostatik test degerlendirmesini sahada daha hizli ve daha kontrollu "
                 "yapmak icin tasarlandi. Solda veri girisi, sagda ise karar, katsayi durumu ve "
-                "oturum kaydi birlikte gorulur."
+                "oturum kaydi birlikte gorulur. Mevcut akista hesap ve isaret tanimlari "
+                f"{SPEC_DOCUMENT_CODE} {SPEC_DOCUMENT_TITLE} ile hizalanmistir."
             ),
             wraplength=1180,
             justify="left",
@@ -506,13 +529,31 @@ class HydrostaticTestApp:
             textvariable=self.coefficient_status_vars["air_a"],
             foreground="#8A6D3B",
         ).grid(row=1, column=2, columnspan=2, sticky="w", pady=6)
+        ttk.Label(conditions_frame, text="A secenegi").grid(row=2, column=0, sticky="w", pady=6)
+        air_a_mode_combo = ttk.Combobox(
+            conditions_frame,
+            textvariable=self.air_a_mode_var,
+            state="readonly",
+            values=(AUTO_A_MODE, REFERENCE_A_MODE, MANUAL_A_MODE),
+        )
+        air_a_mode_combo.grid(row=2, column=1, sticky="ew", padx=(0, 12), pady=6)
+        air_a_mode_combo.bind("<<ComboboxSelected>>", self._on_air_a_mode_changed)
+        ttk.Label(conditions_frame, text="A referans noktasi").grid(row=2, column=2, sticky="w", pady=6)
+        self.air_a_reference_combo = ttk.Combobox(
+            conditions_frame,
+            textvariable=self.air_a_reference_var,
+            state="disabled",
+            values=get_reference_option_labels(),
+        )
+        self.air_a_reference_combo.grid(row=2, column=3, sticky="ew", padx=(0, 12), pady=6)
+        self.air_a_reference_combo.bind("<<ComboboxSelected>>", self._on_air_a_reference_changed)
         ttk.Label(
             conditions_frame,
             text="Sicaklik veya basinc degisirse A yeniden hesaplanmalidir.",
             wraplength=860,
             justify="left",
             foreground="#35506B",
-        ).grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
         measurements_frame = ttk.LabelFrame(frame, text="2. Olculen Degerler", padding=12)
         measurements_frame.grid(row=1, column=0, sticky="ew", pady=(14, 0))
@@ -521,7 +562,7 @@ class HydrostaticTestApp:
         self._add_entry(
             measurements_frame,
             0,
-            "Basinc artisi P (bar)",
+            "Basinc artisi P (bar, sartname: 1.0)",
             self.air_vars["pressure_rise_bar"],
             field_key="air.pressure_rise_bar",
         )
@@ -553,7 +594,8 @@ class HydrostaticTestApp:
 
         actions_frame = ttk.Frame(frame)
         actions_frame.grid(row=2, column=0, sticky="ew", pady=(14, 0))
-        ttk.Button(actions_frame, text="A Hesapla", command=self._calculate_air_a).pack(side="left")
+        self.air_a_calculate_button = ttk.Button(actions_frame, text="A Hesapla", command=self._calculate_air_a)
+        self.air_a_calculate_button.pack(side="left")
         ttk.Button(actions_frame, text="Hava Testini Degerlendir", command=self._run_air_test).pack(
             side="left", padx=(8, 0)
         )
@@ -562,7 +604,7 @@ class HydrostaticTestApp:
             frame,
             text=(
                 "Operasyon sirasi: 1) sicaklik ve basinci girin, 2) A'yi dogrulayin, "
-                "3) P, K ve Vpa degerlerini girip testi degerlendirin."
+                "3) sartname geregi 1.0 bar P, K ve Vpa degerleriyle testi degerlendirin."
             ),
             wraplength=860,
             justify="left",
@@ -603,7 +645,6 @@ class HydrostaticTestApp:
             "A (10^-6 / bar)",
             self.pressure_vars["a_micro_per_bar"],
             field_key="pressure.a_micro_per_bar",
-            readonly=True,
         )
         self._add_entry(
             conditions_frame,
@@ -623,6 +664,42 @@ class HydrostaticTestApp:
             textvariable=self.coefficient_status_vars["pressure_b"],
             foreground="#8A6D3B",
         ).grid(row=2, column=2, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Label(conditions_frame, text="A secenegi").grid(row=3, column=0, sticky="w", pady=6)
+        pressure_a_mode_combo = ttk.Combobox(
+            conditions_frame,
+            textvariable=self.pressure_a_mode_var,
+            state="readonly",
+            values=(AUTO_A_MODE, REFERENCE_A_MODE, MANUAL_A_MODE),
+        )
+        pressure_a_mode_combo.grid(row=3, column=1, sticky="ew", padx=(0, 12), pady=6)
+        pressure_a_mode_combo.bind("<<ComboboxSelected>>", self._on_pressure_a_mode_changed)
+        ttk.Label(conditions_frame, text="B secenegi").grid(row=3, column=2, sticky="w", pady=6)
+        pressure_b_mode_combo = ttk.Combobox(
+            conditions_frame,
+            textvariable=self.pressure_b_mode_var,
+            state="readonly",
+            values=(AUTO_B_MODE, REFERENCE_B_MODE, MANUAL_B_MODE),
+        )
+        pressure_b_mode_combo.grid(row=3, column=3, sticky="ew", padx=(0, 12), pady=6)
+        pressure_b_mode_combo.bind("<<ComboboxSelected>>", self._on_pressure_b_mode_changed)
+        ttk.Label(conditions_frame, text="A referans noktasi").grid(row=4, column=0, sticky="w", pady=6)
+        self.pressure_a_reference_combo = ttk.Combobox(
+            conditions_frame,
+            textvariable=self.pressure_a_reference_var,
+            state="disabled",
+            values=get_reference_option_labels(),
+        )
+        self.pressure_a_reference_combo.grid(row=4, column=1, sticky="ew", padx=(0, 12), pady=6)
+        self.pressure_a_reference_combo.bind("<<ComboboxSelected>>", self._on_pressure_a_reference_changed)
+        ttk.Label(conditions_frame, text="B referans noktasi").grid(row=4, column=2, sticky="w", pady=6)
+        self.pressure_b_reference_combo = ttk.Combobox(
+            conditions_frame,
+            textvariable=self.pressure_b_reference_var,
+            state="disabled",
+            values=get_reference_option_labels(),
+        )
+        self.pressure_b_reference_combo.grid(row=4, column=3, sticky="ew", padx=(0, 12), pady=6)
+        self.pressure_b_reference_combo.bind("<<ComboboxSelected>>", self._on_pressure_b_reference_changed)
 
         measurements_frame = ttk.LabelFrame(frame, text="2. Olculen Degerler", padding=12)
         measurements_frame.grid(row=1, column=0, sticky="ew", pady=(14, 0))
@@ -631,14 +708,14 @@ class HydrostaticTestApp:
         self._add_entry(
             measurements_frame,
             0,
-            "Su sicaklik degisimi dT (degC)",
+            "Su sicaklik degisimi dT = Tilk - Tson (degC)",
             self.pressure_vars["delta_t_c"],
             field_key="pressure.delta_t_c",
         )
         self._add_entry(
             measurements_frame,
             0,
-            "Fiili basinc degisimi Pa (bar)",
+            "Fiili basinc degisimi Pa = Pilk - Pson (bar)",
             self.pressure_vars["actual_pressure_change_bar"],
             field_key="pressure.actual_pressure_change_bar",
             column=2,
@@ -648,15 +725,18 @@ class HydrostaticTestApp:
         helper_frame.grid(row=2, column=0, sticky="ew", pady=(14, 0))
         helper_frame.columnconfigure(1, weight=1)
         helper_frame.columnconfigure(3, weight=1)
-        ttk.Checkbutton(
+        ttk.Label(
             helper_frame,
-            text="Degerlendirmede B yardimcisini otomatik kullan",
-            variable=self.use_b_helper_var,
-            command=self._apply_b_helper_mode,
+            text=(
+                "B secenegi ustte belirlenir. Otomatik modda su beta ve celik alpha ile hesaplanir; "
+                "manuel modda ise B degeri dogrudan girilir."
+            ),
+            wraplength=860,
+            justify="left",
         ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
 
         ttk.Label(helper_frame, text="Celik preset").grid(row=1, column=0, sticky="w", pady=6)
-        steel_preset = ttk.Combobox(
+        self.steel_preset_combo = ttk.Combobox(
             helper_frame,
             textvariable=self.steel_preset_var,
             state="readonly",
@@ -667,8 +747,8 @@ class HydrostaticTestApp:
                 "Ozel",
             ),
         )
-        steel_preset.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=6)
-        steel_preset.bind("<<ComboboxSelected>>", self._on_steel_preset_changed)
+        self.steel_preset_combo.grid(row=1, column=1, sticky="ew", padx=(0, 12), pady=6)
+        self.steel_preset_combo.bind("<<ComboboxSelected>>", self._on_steel_preset_changed)
 
         self._add_entry(
             helper_frame,
@@ -686,10 +766,12 @@ class HydrostaticTestApp:
             field_key="helper.water_beta_micro_per_c",
             readonly=True,
         )
-        ttk.Button(helper_frame, text="A Hesapla", command=self._calculate_pressure_a).grid(
+        self.pressure_a_calculate_button = ttk.Button(helper_frame, text="A Hesapla", command=self._calculate_pressure_a)
+        self.pressure_a_calculate_button.grid(
             row=2, column=0, sticky="w", pady=6
         )
-        ttk.Button(helper_frame, text="B Hesapla", command=self._calculate_b_helper).grid(
+        self.b_helper_calculate_button = ttk.Button(helper_frame, text="B Hesapla", command=self._calculate_b_helper)
+        self.b_helper_calculate_button.grid(
             row=2, column=1, sticky="w", pady=6
         )
         ttk.Button(
@@ -710,7 +792,7 @@ class HydrostaticTestApp:
             frame,
             text=(
                 "Operasyon sirasi: 1) sicaklik ve basinci girin, 2) A ve gerekiyorsa B'yi hazirlayin, "
-                "3) dT ve Pa degerleriyle testi degerlendirin."
+                "3) dT = Tilk - Tson ve Pa = Pilk - Pson degerleriyle testi degerlendirin."
             ),
             wraplength=860,
             justify="left",
@@ -946,7 +1028,7 @@ class HydrostaticTestApp:
 
     def _mark_dependencies_changed(self, keys: tuple[str, ...]) -> None:
         for key in keys:
-            if self.coefficient_states[key] == "computed":
+            if self.coefficient_states[key] in {"computed", "reference"}:
                 self.coefficient_states[key] = "stale"
         self._refresh_coefficient_statuses()
         self._update_workflow_hint()
@@ -978,14 +1060,39 @@ class HydrostaticTestApp:
             var.set("")
 
     def _auto_field_hint(self, field_key: str) -> str:
-        hints = {
-            "air.a_micro_per_bar": "A Hesapla ile doldurulur.",
-            "pressure.a_micro_per_bar": "A Hesapla ile doldurulur.",
-            "helper.water_beta_micro_per_c": "B hesaplandiginda olusur.",
-        }
-        if field_key == "pressure.b_micro_per_c" and self.use_b_helper_var.get():
-            return "B helper acik oldugu icin bu alan otomatik doldurulur."
-        return hints.get(field_key, "")
+        if field_key == "air.a_micro_per_bar":
+            if self._air_a_is_auto():
+                return "Otomatik modda A Hesapla ile veya test sirasinda doldurulur."
+            if self._air_a_is_reference():
+                return "Referans modda dogrulanmis bir nokta secerek A degerini yukleyin."
+            return "Manuel modda tablo/prosedurden A degerini girin."
+        if field_key == "pressure.a_micro_per_bar":
+            if self._pressure_a_is_auto():
+                return "Otomatik modda A Hesapla ile veya test sirasinda doldurulur."
+            if self._pressure_a_is_reference():
+                return "Referans modda dogrulanmis bir nokta secerek A degerini yukleyin."
+            return "Manuel modda tablo/prosedurden A degerini girin."
+        if field_key == "pressure.b_micro_per_c":
+            if self.use_b_helper_var.get():
+                if self._pressure_b_is_reference():
+                    return "Referans modda su beta referansi ve celik alpha ile B olusturulur."
+                return "Otomatik modda B, su beta ve celik alpha ile hesaplanir."
+            return "Manuel modda tablo/prosedurden B degerini girin."
+        if field_key == "air.pressure_rise_bar":
+            return "Sartnameye gore bu alan 1.0 bar olmalidir."
+        if field_key == "pressure.delta_t_c":
+            return "dT degeri Tilk - Tson olarak girilir."
+        if field_key == "pressure.actual_pressure_change_bar":
+            return "Pa degeri Pilk - Pson olarak girilir."
+        if field_key == "helper.steel_alpha_micro_per_c" and self.use_b_helper_var.get():
+            if self._pressure_b_is_reference():
+                return "Referans B icin celik alpha secin; secili beta ile birlikte B olusturulur."
+            return "Otomatik B icin celik alpha preset secin veya ozel deger girin."
+        if field_key == "helper.water_beta_micro_per_c" and self.use_b_helper_var.get():
+            if self._pressure_b_is_reference():
+                return "Secilen referans noktanin su beta degeri burada gosterilir."
+            return "B hesaplandiginda su beta burada gosterilir."
+        return ""
 
     def _update_live_notice(self) -> None:
         invalid_count = 0
@@ -1112,11 +1219,13 @@ class HydrostaticTestApp:
     def _coefficient_status_text(self, key: str) -> str:
         state = self.coefficient_states[key]
         if state == "computed":
-            return "Hazir: hesaplandi"
+            return "Hazir: otomatik hesap"
+        if state == "reference":
+            return "Hazir: referans nokta"
         if state == "stale":
-            return "Guncellenmeli: kosullar degisti"
+            return "Guncellenmeli: secenek veya kosullar degisti"
         if state == "manual":
-            return "Manuel giris"
+            return "Hazir: manuel giris"
         return "Bekleniyor"
 
     def _sync_coefficient_field_messages(self) -> None:
@@ -1132,6 +1241,8 @@ class HydrostaticTestApp:
                 self._set_field_message(field_key, "Kosullar degisti, yeniden hesaplayin.", "warning")
             elif state == "computed":
                 self._set_field_message(field_key, "Hesap guncel.", "success")
+            elif state == "reference":
+                self._set_field_message(field_key, "Referans noktadan yuklendi.", "success")
             elif state == "manual":
                 self._set_field_message(field_key, "Manuel giris aktif.", "info")
             elif existing_message is not None and not existing_message.get():
@@ -1356,19 +1467,33 @@ class HydrostaticTestApp:
     def _update_workflow_hint(self) -> None:
         active_tab = self._active_tab_key()
         if active_tab == "air":
+            a_hint = (
+                "A otomatik modda."
+                if self._air_a_is_auto()
+                else "A manuel modda; tablo/prosedur degeri beklenir."
+            )
             self.workflow_hint_var.set(
                 "Aktif test: Hava Icerik Testi. Onerilen akis: geometriyi kontrol edin, A'yi hesaplayin, "
-                "P, K ve Vpa girip 'Aktif Testi Degerlendir' kullanin. Kisayol: Ctrl+Enter."
+                "sartnameye gore P=1.0 bar, K ve Vpa girip 'Aktif Testi Degerlendir' kullanin. "
+                + a_hint
+                + " Kisayol: Ctrl+Enter."
             )
         else:
+            a_mode = (
+                "A otomatik modda."
+                if self._pressure_a_is_auto()
+                else "A manuel modda; tablo/prosedur degeri beklenir."
+            )
             b_mode = (
-                "B helper acik; degerlendirme sirasinda B otomatik uretilebilir."
+                "B otomatik modda; helper su beta ve celik alpha ile hesaplar."
                 if self.use_b_helper_var.get()
-                else "B helper kapali; B degerini manuel ve dogrulanmis kaynaktan girmelisiniz."
+                else "B manuel modda; degeri dogrudan ve dogrulanmis kaynaktan girmelisiniz."
             )
             self.workflow_hint_var.set(
                 "Aktif test: Basinc Degisim Testi. Onerilen akis: geometriyi kontrol edin, A ve B'yi hazirlayin, "
-                "dT ile Pa girip degerlendirin. "
+                "dT = Tilk - Tson ve Pa = Pilk - Pson girip degerlendirin. "
+                + a_mode
+                + " "
                 + b_mode
             )
 
@@ -1424,45 +1549,265 @@ class HydrostaticTestApp:
             self._clear_field_message(field_key)
         return value
 
+    def _air_a_is_auto(self) -> bool:
+        return self.air_a_mode_var.get() == AUTO_A_MODE
+
+    def _pressure_a_is_auto(self) -> bool:
+        return self.pressure_a_mode_var.get() == AUTO_A_MODE
+
+    def _pressure_b_is_auto(self) -> bool:
+        return self.pressure_b_mode_var.get() == AUTO_B_MODE
+
+    def _air_a_is_reference(self) -> bool:
+        return self.air_a_mode_var.get() == REFERENCE_A_MODE
+
+    def _pressure_a_is_reference(self) -> bool:
+        return self.pressure_a_mode_var.get() == REFERENCE_A_MODE
+
+    def _pressure_b_is_reference(self) -> bool:
+        return self.pressure_b_mode_var.get() == REFERENCE_B_MODE
+
+    def _apply_single_coefficient_mode(
+        self,
+        *,
+        key: str,
+        field_key: str,
+        variable: tk.StringVar,
+        mode: str,
+        reference_combo: ttk.Combobox | None = None,
+        auto_banner: str,
+        reference_banner: str,
+        manual_banner: str,
+    ) -> None:
+        entry = self.entry_widgets.get(field_key)
+        if entry is not None:
+            entry.configure(state="readonly" if mode != MANUAL_A_MODE else "normal")
+        if reference_combo is not None:
+            reference_combo.configure(state="readonly" if mode == REFERENCE_A_MODE else "disabled")
+        if field_key == "air.a_micro_per_bar" and hasattr(self, "air_a_calculate_button"):
+            self.air_a_calculate_button.configure(state="normal" if mode == AUTO_A_MODE else "disabled")
+        if field_key == "pressure.a_micro_per_bar" and hasattr(self, "pressure_a_calculate_button"):
+            self.pressure_a_calculate_button.configure(state="normal" if mode == AUTO_A_MODE else "disabled")
+        meta = self.field_meta.get(field_key)
+        if meta is not None:
+            meta["required"] = mode == MANUAL_A_MODE
+            meta["readonly"] = mode != MANUAL_A_MODE
+        if mode == AUTO_A_MODE:
+            self.coefficient_states[key] = "stale" if variable.get().strip() else "empty"
+            self._set_banner(auto_banner, "info")
+        elif mode == REFERENCE_A_MODE:
+            self.coefficient_states[key] = "reference" if variable.get().strip() else "empty"
+            self._set_banner(reference_banner, "info")
+        else:
+            self.coefficient_states[key] = "manual" if variable.get().strip() else "empty"
+            self._set_banner(manual_banner, "warning")
+        self._refresh_coefficient_statuses()
+        self._update_live_notice()
+        self._update_workflow_hint()
+
+    def _on_air_a_mode_changed(self, _: tk.Event | None = None) -> None:
+        self._apply_single_coefficient_mode(
+            key="air_a",
+            field_key="air.a_micro_per_bar",
+            variable=self.air_vars["a_micro_per_bar"],
+            mode=self.air_a_mode_var.get(),
+            reference_combo=self.air_a_reference_combo,
+            auto_banner="Hava A secenegi otomatik. A Hesapla butonu veya degerlendirme akisi bu alani doldurur.",
+            reference_banner="Hava A secenegi referans modda. Dogrulanmis bir referans nokta secin.",
+            manual_banner="Hava A secenegi manuel. Tablo/prosedur degerini dogrudan girebilirsiniz.",
+        )
+
+    def _on_pressure_a_mode_changed(self, _: tk.Event | None = None) -> None:
+        self._apply_single_coefficient_mode(
+            key="pressure_a",
+            field_key="pressure.a_micro_per_bar",
+            variable=self.pressure_vars["a_micro_per_bar"],
+            mode=self.pressure_a_mode_var.get(),
+            reference_combo=self.pressure_a_reference_combo,
+            auto_banner="Basinc testi A secenegi otomatik. A Hesapla butonu veya degerlendirme akisi bu alani doldurur.",
+            reference_banner="Basinc testi A secenegi referans modda. Dogrulanmis bir referans nokta secin.",
+            manual_banner="Basinc testi A secenegi manuel. Tablo/prosedur degerini dogrudan girebilirsiniz.",
+        )
+
+    def _on_air_a_reference_changed(self, _: tk.Event | None = None) -> None:
+        self._apply_air_a_reference(log_result=True)
+
+    def _on_pressure_a_reference_changed(self, _: tk.Event | None = None) -> None:
+        self._apply_pressure_a_reference(log_result=True)
+
+    def _on_pressure_b_reference_changed(self, _: tk.Event | None = None) -> None:
+        self._apply_pressure_b_reference(log_result=True)
+
+    def _on_pressure_b_mode_changed(self, _: tk.Event | None = None) -> None:
+        self._apply_b_helper_mode()
+
     def _apply_b_helper_mode(self) -> None:
         b_entry = self.entry_widgets.get("pressure.b_micro_per_c")
+        steel_entry = self.entry_widgets.get("helper.steel_alpha_micro_per_c")
+        water_entry = self.entry_widgets.get("helper.water_beta_micro_per_c")
         if b_entry is None:
             return
-        if self.use_b_helper_var.get():
+        auto_mode = self._pressure_b_is_auto()
+        reference_mode = self._pressure_b_is_reference()
+        self.use_b_helper_var.set(auto_mode or reference_mode)
+        if hasattr(self, "pressure_b_reference_combo"):
+            self.pressure_b_reference_combo.configure(state="readonly" if reference_mode else "disabled")
+        if auto_mode or reference_mode:
             b_entry.configure(state="readonly")
-            if self.coefficient_states["pressure_b"] == "manual":
-                self.coefficient_states["pressure_b"] = "stale"
-                self._refresh_coefficient_statuses()
-            self.helper_mode_summary_var.set(
-                "B helper modu acik. B alani kilitlidir; helper su beta ve celik alpha ile otomatik hesaplar."
-            )
-            self._set_banner(
-                "B helper modu acik. Degerlendirme sirasinda B helper kullanilir ve alan otomatik doldurulur.",
-                "info",
-            )
+            if steel_entry is not None:
+                steel_entry.configure(state="normal")
+            if water_entry is not None:
+                water_entry.configure(state="readonly")
+            if hasattr(self, "steel_preset_combo"):
+                self.steel_preset_combo.configure(state="readonly")
+            if hasattr(self, "b_helper_calculate_button"):
+                self.b_helper_calculate_button.configure(state="normal" if auto_mode else "disabled")
+            self.field_meta["pressure.b_micro_per_c"]["required"] = False
+            self.field_meta["pressure.b_micro_per_c"]["readonly"] = True
+            self.field_meta["helper.steel_alpha_micro_per_c"]["required"] = True
+            self.field_meta["helper.steel_alpha_micro_per_c"]["readonly"] = False
+            self.field_meta["helper.water_beta_micro_per_c"]["required"] = False
+            self.field_meta["helper.water_beta_micro_per_c"]["readonly"] = True
+            if auto_mode:
+                self.coefficient_states["pressure_b"] = (
+                    "stale" if self.pressure_vars["b_micro_per_c"].get().strip() else "empty"
+                )
+                self.helper_mode_summary_var.set(
+                    "B secenegi otomatik. B alani kilitlidir; helper su beta ve celik alpha ile hesaplar."
+                )
+                self._set_banner(
+                    "B secenegi otomatik. Degerlendirme sirasinda B helper kullanilir ve alan otomatik doldurulur.",
+                    "info",
+                )
+            else:
+                self.coefficient_states["pressure_b"] = (
+                    "reference" if self.pressure_vars["b_micro_per_c"].get().strip() else "empty"
+                )
+                self.helper_mode_summary_var.set(
+                    "B secenegi referans modda. B icin dogrulanmis bir referans nokta secilir, sonra secili celik alpha kullanilir."
+                )
+                self._set_banner(
+                    "B secenegi referans modda. Bir referans nokta secerek su beta ve B degerini yukleyin.",
+                    "info",
+                )
         else:
             b_entry.configure(state="normal")
-            if not self.pressure_vars["b_micro_per_c"].get().strip():
-                self.coefficient_states["pressure_b"] = "empty"
-                self._refresh_coefficient_statuses()
+            if steel_entry is not None:
+                steel_entry.configure(state="disabled")
+            if water_entry is not None:
+                water_entry.configure(state="disabled")
+            if hasattr(self, "steel_preset_combo"):
+                self.steel_preset_combo.configure(state="disabled")
+            if hasattr(self, "b_helper_calculate_button"):
+                self.b_helper_calculate_button.configure(state="disabled")
+            self.field_meta["pressure.b_micro_per_c"]["required"] = True
+            self.field_meta["pressure.b_micro_per_c"]["readonly"] = False
+            self.field_meta["helper.steel_alpha_micro_per_c"]["required"] = False
+            self.field_meta["helper.steel_alpha_micro_per_c"]["readonly"] = True
+            self.field_meta["helper.water_beta_micro_per_c"]["required"] = False
+            self.field_meta["helper.water_beta_micro_per_c"]["readonly"] = True
+            self.b_helper_vars["water_beta_micro_per_c"].set("")
+            self.coefficient_states["pressure_b"] = (
+                "manual" if self.pressure_vars["b_micro_per_c"].get().strip() else "empty"
+            )
             self.helper_mode_summary_var.set(
-                "B helper modu kapali. B degerini manuel girin ve kullandiginiz tablo/proseduru dogrulayin."
+                "B secenegi manuel. B degerini tabloda veya prosedurde dogrulanan haliyle dogrudan girin."
             )
             self._set_banner(
-                "B helper modu kapali. Basinc testi icin B degerini manuel girmeniz gerekir.",
+                "B secenegi manuel. Basinc testi icin B degerini dogrudan girmeniz gerekir.",
                 "warning",
             )
+        self._refresh_coefficient_statuses()
         self._sync_coefficient_field_messages()
         self._update_live_notice()
         self._update_workflow_hint()
 
-    def _set_coefficient_value(self, key: str, variable: tk.StringVar, value: float) -> None:
+    def _apply_air_a_reference(self, log_result: bool = True) -> bool:
+        point = find_reference_point(self.air_a_reference_var.get())
+        if point is None:
+            self._set_feedback("air", "Hava A icin bir referans nokta secin.")
+            self._focus_field("air.a_micro_per_bar")
+            return False
+        self._set_coefficient_value("air_a", self.air_vars["a_micro_per_bar"], point.a_micro_per_bar, state="reference")
+        if log_result:
+            self._append_result(
+                "Hava Icerik Testi - A referansi",
+                (
+                    f"A = {point.a_micro_per_bar:.6f} (10^-6 / bar) referans noktadan yuklendi.\n"
+                    f"Referans: {point.label}\n"
+                    f"Kaynak: {point.source_note}"
+                ),
+            )
+        self._set_banner("Hava icerik testi icin A referans noktadan yuklendi.", "success")
+        return True
+
+    def _apply_pressure_a_reference(self, log_result: bool = True) -> bool:
+        point = find_reference_point(self.pressure_a_reference_var.get())
+        if point is None:
+            self._set_feedback("pressure", "Basinc testi A icin bir referans nokta secin.")
+            self._focus_field("pressure.a_micro_per_bar")
+            return False
+        self._set_coefficient_value("pressure_a", self.pressure_vars["a_micro_per_bar"], point.a_micro_per_bar, state="reference")
+        if log_result:
+            self._append_result(
+                "Basinc Degisim Testi - A referansi",
+                (
+                    f"A = {point.a_micro_per_bar:.6f} (10^-6 / bar) referans noktadan yuklendi.\n"
+                    f"Referans: {point.label}\n"
+                    f"Kaynak: {point.source_note}"
+                ),
+            )
+        self._set_banner("Basinc testi icin A referans noktadan yuklendi.", "success")
+        return True
+
+    def _apply_pressure_b_reference(self, log_result: bool = True) -> bool:
+        point = find_reference_point(self.pressure_b_reference_var.get())
+        if point is None:
+            self._set_feedback("pressure", "Basinc testi B icin bir referans nokta secin.")
+            self._focus_field("pressure.b_micro_per_c")
+            return False
+        try:
+            steel_alpha = self._read_float(
+                self.b_helper_vars["steel_alpha_micro_per_c"],
+                "Celik alpha",
+                "pressure",
+                "helper.steel_alpha_micro_per_c",
+            )
+            b_value = calculate_b_coefficient(point.water_beta_micro_per_c, steel_alpha)
+        except ValidationError as exc:
+            self._set_banner(str(exc), "error")
+            self._update_decision_card("Basinc Degisim Testi", "DOGRULANAMADI", str(exc))
+            return False
+        self.b_helper_vars["water_beta_micro_per_c"].set(f"{point.water_beta_micro_per_c:.6f}")
+        self._set_coefficient_value("pressure_b", self.pressure_vars["b_micro_per_c"], b_value, state="reference")
+        if log_result:
+            self._append_result(
+                "Basinc Degisim Testi - B referansi",
+                (
+                    f"Su beta referansi: {point.water_beta_micro_per_c:.6f} (10^-6 / degC)\n"
+                    f"Celik alpha: {steel_alpha:.6f} (10^-6 / degC)\n"
+                    f"Hesaplanan B: {b_value:.6f} (10^-6 / degC)\n"
+                    f"Referans: {point.label}\n"
+                    f"Kaynak: {point.source_note}"
+                ),
+            )
+        self._set_banner("Basinc testi icin B referans noktadan yuklendi.", "success")
+        return True
+
+    def _set_coefficient_value(
+        self,
+        key: str,
+        variable: tk.StringVar,
+        value: float,
+        *,
+        state: str = "computed",
+    ) -> None:
         self._programmatic_coefficient_updates.add(key)
         try:
             variable.set(f"{value:.6f}")
         finally:
             self._programmatic_coefficient_updates.discard(key)
-        self.coefficient_states[key] = "computed"
+        self.coefficient_states[key] = state
         self._refresh_coefficient_statuses()
 
     def _update_decision_card(self, title: str, status: str, summary: str) -> None:
@@ -1585,13 +1930,31 @@ class HydrostaticTestApp:
         return bool(self.pressure_vars["b_micro_per_c"].get().strip())
 
     def _ensure_coefficient_ready(self, key: str) -> bool:
-        if self.coefficient_states[key] in {"computed", "manual"} and self.coefficient_value_present(key):
+        if self.coefficient_states[key] in {"computed", "reference", "manual"} and self.coefficient_value_present(key):
             return True
         if key == "air_a":
-            return self._calculate_air_a(log_result=False)
+            if self._air_a_is_auto():
+                return self._calculate_air_a(log_result=False)
+            if self._air_a_is_reference():
+                return self._apply_air_a_reference(log_result=False)
+            self._set_feedback("air", "A degeri manuel secenekte tablo/prosedurdan girilmelidir.")
+            self._focus_field("air.a_micro_per_bar")
+            self._set_banner("Hava testi icin A degeri manuel olarak girilmelidir.", "warning")
+            self._update_decision_card("Hava Icerik Testi", "DOGRULANAMADI", "Gerekli A katsayisi hazir degil.")
+            return False
         if key == "pressure_a":
-            return self._calculate_pressure_a(log_result=False)
+            if self._pressure_a_is_auto():
+                return self._calculate_pressure_a(log_result=False)
+            if self._pressure_a_is_reference():
+                return self._apply_pressure_a_reference(log_result=False)
+            self._set_feedback("pressure", "A degeri manuel secenekte tablo/prosedurdan girilmelidir.")
+            self._focus_field("pressure.a_micro_per_bar")
+            self._set_banner("Basinc testi icin A degeri manuel olarak girilmelidir.", "warning")
+            self._update_decision_card("Basinc Degisim Testi", "DOGRULANAMADI", "Gerekli A katsayisi hazir degil.")
+            return False
         if key == "pressure_b" and self.use_b_helper_var.get():
+            if self._pressure_b_is_reference():
+                return self._apply_pressure_b_reference(log_result=False)
             return self._calculate_b_helper(log_result=False)
         self._set_feedback("pressure", "B degeri manuel girilmeli veya yardimci ile hesaplanmali.")
         self._focus_field("pressure.b_micro_per_c")
@@ -1629,7 +1992,7 @@ class HydrostaticTestApp:
             "Hava Icerik Testi",
             status,
             (
-                f"Vpq = {result.theoretical_added_water_m3:.6f} m3, limit = {result.acceptance_limit_m3:.6f} m3, "
+                f"Vp = {result.theoretical_added_water_m3:.6f} m3, limit = {result.acceptance_limit_m3:.6f} m3, "
                 f"Vpa = {result.actual_added_water_m3:.6f} m3, oran = {result.ratio:.6f}"
             ),
         )
@@ -1640,14 +2003,14 @@ class HydrostaticTestApp:
                 f"Su sicakligi: {self.air_vars['temperature_c'].get().strip()} degC\n"
                 f"Su basinci: {self.air_vars['pressure_bar'].get().strip()} bar\n"
                 f"A: {self.air_vars['a_micro_per_bar'].get().strip()} (10^-6 / bar)\n"
-                f"Basinc artisi P: {self.air_vars['pressure_rise_bar'].get().strip()} bar\n"
+                f"Basinc artisi P (sartname): {self.air_vars['pressure_rise_bar'].get().strip()} bar\n"
                 f"K faktor: {self.air_vars['k_factor'].get().strip()}\n"
                 f"Ic yaricap: {pipe.internal_radius_mm:.3f} mm\n"
                 f"Ic hacim Vt: {pipe.internal_volume_m3:.6f} m3\n"
-                f"Teorik ilave su Vpq: {result.theoretical_added_water_m3:.6f} m3\n"
-                f"Kabul limiti (1.06 x Vpq): {result.acceptance_limit_m3:.6f} m3\n"
+                f"Teorik ilave su Vp: {result.theoretical_added_water_m3:.6f} m3\n"
+                f"Kabul limiti (1.06 x Vp): {result.acceptance_limit_m3:.6f} m3\n"
                 f"Fiili ilave su Vpa: {result.actual_added_water_m3:.6f} m3\n"
-                f"Vpa / Vpq: {result.ratio:.6f}"
+                f"Vpa / Vp: {result.ratio:.6f}"
             ),
         )
         self._set_banner("Hava icerik testi degerlendirmesi tamamlandi.", "success")
@@ -1702,8 +2065,8 @@ class HydrostaticTestApp:
                 f"Su basinci: {self.pressure_vars['pressure_bar'].get().strip()} bar\n"
                 f"A: {self.pressure_vars['a_micro_per_bar'].get().strip()} (10^-6 / bar)\n"
                 f"B: {self.pressure_vars['b_micro_per_c'].get().strip()} (10^-6 / degC)\n"
-                f"Su sicaklik degisimi dT: {self.pressure_vars['delta_t_c'].get().strip()} degC\n"
-                f"Fiili basinc degisimi Pa: {self.pressure_vars['actual_pressure_change_bar'].get().strip()} bar\n"
+                f"Su sicaklik degisimi dT = Tilk - Tson: {self.pressure_vars['delta_t_c'].get().strip()} degC\n"
+                f"Fiili basinc degisimi Pa = Pilk - Pson: {self.pressure_vars['actual_pressure_change_bar'].get().strip()} bar\n"
                 f"B helper modu: {'Acik' if self.use_b_helper_var.get() else 'Kapali'}\n"
                 f"Celik alpha: {self.b_helper_vars['steel_alpha_micro_per_c'].get().strip() or '-'} (10^-6 / degC)\n"
                 f"Su beta: {self.b_helper_vars['water_beta_micro_per_c'].get().strip() or '-'} (10^-6 / degC)\n"
@@ -1728,9 +2091,10 @@ class HydrostaticTestApp:
 
     def _clear_air_form(self) -> None:
         for key, variable in self.air_vars.items():
-            if key == "k_factor":
+            if key in {"k_factor", "pressure_rise_bar"}:
                 continue
             variable.set("")
+        self.air_vars["pressure_rise_bar"].set("1.0")
         self.air_vars["k_factor"].set(self._default_k_factor())
         self.coefficient_states["air_a"] = "empty"
         self._remove_touched_fields("air")
@@ -1772,6 +2136,7 @@ class HydrostaticTestApp:
         lines = [
             f"{APP_NAME} Raporu",
             f"Surum: {APP_VERSION}",
+            f"Referans sartname: {SPEC_DOCUMENT_CODE} - {SPEC_DOCUMENT_TITLE}",
             f"Olusturma zamani: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "",
             "Boru Kesiti",
@@ -1796,18 +2161,24 @@ class HydrostaticTestApp:
                 "Hava Icerik Testi Girdileri",
                 f"Su sicakligi (degC): {self._format_var_value(self.air_vars['temperature_c'])}",
                 f"Su basinci (bar): {self._format_var_value(self.air_vars['pressure_bar'])}",
+                f"A secenegi: {self.air_a_mode_var.get().strip()}",
+                f"A referans noktasi: {self.air_a_reference_var.get().strip() or '-'}",
                 f"A (10^-6 / bar): {self._format_var_value(self.air_vars['a_micro_per_bar'])}",
-                f"Basinc artisi P (bar): {self._format_var_value(self.air_vars['pressure_rise_bar'])}",
+                f"Basinc artisi P (bar, sartname 1.0): {self._format_var_value(self.air_vars['pressure_rise_bar'])}",
                 f"K faktor: {self._format_var_value(self.air_vars['k_factor'])}",
                 f"Fiili ilave su Vpa (m3): {self._format_var_value(self.air_vars['actual_added_water_m3'])}",
                 "",
                 "Basinc Degisim Testi Girdileri",
                 f"Su sicakligi (degC): {self._format_var_value(self.pressure_vars['temperature_c'])}",
                 f"Su basinci (bar): {self._format_var_value(self.pressure_vars['pressure_bar'])}",
+                f"A secenegi: {self.pressure_a_mode_var.get().strip()}",
+                f"A referans noktasi: {self.pressure_a_reference_var.get().strip() or '-'}",
                 f"A (10^-6 / bar): {self._format_var_value(self.pressure_vars['a_micro_per_bar'])}",
+                f"B secenegi: {self.pressure_b_mode_var.get().strip()}",
+                f"B referans noktasi: {self.pressure_b_reference_var.get().strip() or '-'}",
                 f"B (10^-6 / degC): {self._format_var_value(self.pressure_vars['b_micro_per_c'])}",
-                f"Su sicaklik degisimi dT (degC): {self._format_var_value(self.pressure_vars['delta_t_c'])}",
-                f"Fiili basinc degisimi Pa (bar): {self._format_var_value(self.pressure_vars['actual_pressure_change_bar'])}",
+                f"Su sicaklik degisimi dT = Tilk - Tson (degC): {self._format_var_value(self.pressure_vars['delta_t_c'])}",
+                f"Fiili basinc degisimi Pa = Pilk - Pson (bar): {self._format_var_value(self.pressure_vars['actual_pressure_change_bar'])}",
                 f"B helper modu: {'Acik' if self.use_b_helper_var.get() else 'Kapali'}",
                 f"Celik alpha (10^-6 / degC): {self._format_var_value(self.b_helper_vars['steel_alpha_micro_per_c'])}",
                 f"Su beta (10^-6 / degC): {self._format_var_value(self.b_helper_vars['water_beta_micro_per_c'])}",
@@ -1828,8 +2199,8 @@ class HydrostaticTestApp:
             [
                 "",
                 "Not",
-                "Bu rapor nihai saha karari icin ASME B31.8 veya sirket proseduru ile birlikte degerlendirilmelidir.",
-                "Basinc degisim testi isaret konvansiyonu nihai prosedur ile tekrar teyit edilmelidir.",
+                "Bu rapor nihai saha karari icin ASME B31.8 ve proje proseduru ile birlikte degerlendirilmelidir.",
+                "Bu cikti dT = Tilk - Tson ve Pa = Pilk - Pson isaret tanimi ile hazirlanmistir.",
             ]
         )
         return "\n".join(lines) + "\n"
@@ -1861,6 +2232,8 @@ class HydrostaticTestApp:
             (
                 f"{APP_NAME}\n"
                 f"Surum: {APP_VERSION}\n\n"
+                f"Referans sartname: {SPEC_DOCUMENT_CODE}\n"
+                f"{SPEC_DOCUMENT_TITLE}\n\n"
                 "Bu uygulama hidrostatik test degerlendirmesi icin gelistirildi.\n"
                 "Geometri manuel girilebilir, ASME B36.10 katalog listesinden secilebilir\n"
                 "ve farkli et kalinliklarina sahip segmentler birlikte modellenebilir."
