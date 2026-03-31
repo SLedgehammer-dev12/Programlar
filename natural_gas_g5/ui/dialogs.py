@@ -6,6 +6,10 @@ Provides reusable dialog functions for user interaction.
 
 from tkinter import messagebox
 from typing import List, Optional
+import tkinter as tk
+from tkinter import ttk
+import customtkinter as ctk
+from natural_gas_g5.config import preferences
 
 
 def show_heos_compatibility_warning(
@@ -61,7 +65,7 @@ def show_heating_value_method_warning(method: str) -> None:
     Args:
         method: Calculation method used
     """
-    if method == "Bileşen bazlı":
+    if method.startswith("Bileşen bazlı"):
         messagebox.showwarning(
             "Isıl Değer Hesaplama Uyarısı ⚠️",
             "CoolProp yerleşik modeli ısıl değerleri doğrudan hesaplayamadığı için,\n"
@@ -108,12 +112,11 @@ def show_about_dialog() -> None:
     """Show application about information."""
     about_text = (
         "Termodinamik Gaz Karışımı Hesaplayıcı\n"
-        "Sürüm 5.0.0 - Modüler Mimari\n\n"
+        "Sürüm 5.3.1 - Profesyonel Sürüm\n\n"
         "Bu program, CoolProp kütüphanesini kullanarak gaz karışımlarının\n"
         "termodinamik özelliklerini hesaplar.\n\n"
-        "Doğal gaz/petrol sektöründe sıkça kullanılan kritik özellikleri\n"
-        "(Z-faktörü, k, a, HHV/LHV) sağlamak üzere tasarlanmıştır.\n\n"
-        "© 2025 Kompresör Pompa"
+        "G5.3 sürümü ile görselleştirme ve raporlama özellikleri eklenmiştir.\n\n"
+        "© 2026 Kompresör Pompa"
     )
     messagebox.showinfo("Hakkında", about_text)
 
@@ -141,7 +144,7 @@ def show_user_guide_dialog() -> None:
         "   • Uyarı mesajları dikkate alınmalıdır\n\n"
         "5. SONUÇLAR:\n"
         "   • Gerçek koşullar (girilen T ve P'de)\n"
-        "   • Standart koşullar (15°C, 101.325 kPa)\n"
+        "   • Standart koşullar (seçilen referans standarda göre)\n"
         "   • Isıl değerler (HHV, LHV, Wobbe)\n"
         "   • Hacim dönüşümü (isteğe bağlı)"
     )
@@ -149,30 +152,80 @@ def show_user_guide_dialog() -> None:
 
 
 def show_new_features_info() -> None:
-    """Show new features information for G5."""
-    info = (
-        "✨ DOĞAL GAZ ÖZELLİKLERİ G5 - YENİ SÜRÜM\n\n"
-        "🔥 YENİ ÖZELLİKLER:\n"
-        "• 📏 Gelişmiş Standartlar: ISO, GPA, API, GOST standartları desteği\n"
-        "• 📉 NCM/SCM Ayrımı: Normal (0°C) ve Standart (seçilen) hacim dönüşümü\n"
-        "• 💾 Kaydet/Yükle: Çalışmalarınızı JSON olarak kaydedip tekrar yükleyin\n"
-        "• 📝 Canlı Loglar: Hesaplama adımlarını ve hataları anlık takip edin\n\n"
-        "🎉 TEMİZ, MODÜLER MİMARİ:\n"
-        "• 15+ modül ile organize kod yapısı\n"
-        "• Her modül tek sorumluluk prensibi ile tasarlanmıştır\n\n"
-        "✅ GELİŞMİŞ DOĞRULAMA:\n"
-        "• Pydantic ile tip güvenli veri yapıları\n"
-        "• Anında girdi doğrulama\n"
-        "• Detaylı hata mesajları\n\n"
-        "🚀 PERFORMANS:\n"
-        "• Optimize edilmiş hesaplama akışı\n"
-        "• Daha hızlı başlangıç (lazy loading)\n\n"
-        "📊 AYNI DOĞRULUK:\n"
-        "• G4.9.1 ile aynı hesaplama sonuçları\n"
-        "• CoolProp entegrasyonu korunmuştur\n\n"
-        "G4.9.1'den G5'e Hoş Geldiniz!"
+    """Show new features information for G5.3 with do not show again option."""
+    # Create custom window
+    dialog = ctk.CTkToplevel()
+    dialog.title("Yenilikler - Sürüm 5.3.1")
+    dialog.geometry("620x600")
+    dialog.resizable(False, False)
+    
+    # Make modal (optional, but good for focus)
+    dialog.transient()
+    dialog.grab_set()
+    
+    # Content Frame
+    frame = ctk.CTkFrame(dialog)
+    frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+    
+    # Title
+    ctk.CTkLabel(
+        frame, 
+        text="🚀 DOĞAL GAZ ÖZELLİKLERİ G5.3 - YENİ SÜRÜM", 
+        font=ctk.CTkFont(size=14, weight="bold")
+    ).pack(pady=(0, 20))
+    
+    # Info Text
+    info_text = (
+        "🌟 YENİ ÖZELLİKLER (v5.3):\n"
+        "• 📈 Faz Diyagramı: Karışımlarınız için çiğlenme/kaynama noktası eğrilerini görün.\n"
+        "• 📄 Profesyonel PDF Raporu: Hesaplamalarınızı grafikler içeren şık PDF'lere dönüştürün.\n"
+        "• 🥧 Bileşen Pasta Grafiği: Gaz kompozisyonunu görsel olarak anlık takip edin.\n"
+        "• 🎨 Çoklu Tema Desteği: Mavi, Yeşil ve Koyu-Mavi tema seçenekleri eklendi.\n"
+        "• ⚡ Akıllı Filtreleme: 100+ gaz arasından sadece yaygın doğal gazları görün.\n"
+        "• 📋 Hazır Şablonlar: Botaş, LNG gibi sık kullanılan gaz karışımlarını tek tıkla yükleyin.\n\n"
+        "🎉 ÖNCEKİ ÖZELLİKLER (v5.2):\n"
+        "• Modüler Mimari ve Modern CustomTkinter Arayüzü.\n"
+        "• KPI Panosu ile en kritik değerlere hızlı bakış.\n"
+        "• Thread-Safe güvenli hesaplama yapısı."
     )
-    messagebox.showinfo("Yeni Sürüm - G5", info)
+    
+    text_area = ctk.CTkTextbox(frame, wrap=tk.WORD, height=250, width=540, font=ctk.CTkFont(size=12))
+    text_area.insert("1.0", info_text)
+    text_area.configure(state="disabled")
+    text_area.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+    
+    # Checkbox
+    dont_show_var = ctk.BooleanVar(value=False)
+    ctk.CTkCheckBox(
+        frame, 
+        text="Bu pencereyi bir daha gösterme", 
+        variable=dont_show_var
+    ).pack(anchor="w", pady=(0, 15))
+    
+    # Close Logic
+    def on_close():
+        if dont_show_var.get():
+            preferences.set_preference("show_welcome_v5_3", False)
+        dialog.destroy()
+    
+    # Button
+    ctk.CTkButton(
+        frame, 
+        text="Tamam, Başlayalım!", 
+        command=on_close,
+        width=200
+    ).pack(anchor="center")
+    
+    # Handle window close button (X)
+    dialog.protocol("WM_DELETE_WINDOW", on_close)
+    
+    # Center on screen
+    dialog.update_idletasks()
+    width = dialog.winfo_width()
+    height = dialog.winfo_height()
+    x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+    y = (dialog.winfo_screenheight() // 2) - (height // 2)
+    dialog.geometry(f'{width}x{height}+{x}+{y}')
 
 
 def confirm_calculation_start() -> bool:

@@ -12,7 +12,8 @@ from natural_gas_g5.utils.result_unit_converter import ResultUnitConverter, Unit
 
 class ActualConditionResults(BaseModel):
     """Results at actual (operating) conditions."""
-    
+    temperature: float = Field(..., description="Operating temperature (K)")
+    pressure: float = Field(..., description="Operating pressure (Pa)")
     density: float = Field(..., description="Mass density (kg/m³)")
     molar_mass: float = Field(..., description="Molar mass (kg/mol)")
     compressibility_factor: float = Field(..., description="Z-factor (dimensionless)")
@@ -74,6 +75,20 @@ class VolumeConversion(BaseModel):
     mass: float = Field(..., description="Total mass (kg)")
     standard_volume: float = Field(..., description="Standard volume (SCM) (Sm³)")
     normal_volume: Optional[float] = Field(None, description="Normal volume (NCM) (Nm³)")
+    normal_volume_error: Optional[str] = Field(None, description="Error message if normal volume calculation fails")
+    
+    model_config = {"frozen": False}
+
+
+class PhaseEnvelopeData(BaseModel):
+    """Phase envelope (dew point and bubble point curve) data."""
+    
+    temperature_k: List[float] = Field(..., description="Temperatures in Kelvin")
+    pressure_pa: List[float] = Field(..., description="Pressures in Pascals")
+    cricondentherm_t: Optional[float] = Field(None, description="Maximum temperature on the envelope")
+    cricondenbar_p: Optional[float] = Field(None, description="Maximum pressure on the envelope")
+    critical_t: Optional[float] = Field(None, description="Critical point temperature")
+    critical_p: Optional[float] = Field(None, description="Critical point pressure")
     
     model_config = {"frozen": False}
 
@@ -90,6 +105,7 @@ class CalculationResult(BaseModel):
     standard: StandardConditionResults = Field(..., description="Standard condition results")
     heating: Optional[HeatingValues] = Field(None, description="Heating values (if calculable)")
     volume_conversion: Optional[VolumeConversion] = Field(None, description="Volume conversion (if provided)")
+    phase_envelope: Optional[PhaseEnvelopeData] = Field(None, description="Phase envelope data for plotting")
     
     def to_display_list(self, unit_system: str = "SI") -> List[Tuple[str, str, str]]:
         """
@@ -161,8 +177,18 @@ class CalculationResult(BaseModel):
             results.append(("Ses Hızı (a)", "Hesaplanamadı", "-"))
         
         # Header - Standard Conditions
-        results.append(("- STANDART ÇEVRİM BİLGİLERİ (SCM @ 15°C, 101.325 kPa) -", "", ""))
-        results.append(("Standart Koşullar", "288.15 K, 101.325 kPa", "-"))
+        std_temp_c = self.standard.reference_temperature - 273.15
+        std_pressure_kpa = self.standard.reference_pressure / 1000.0
+        std_label = f"SCM @ {std_temp_c:.2f}°C, {std_pressure_kpa:.3f} kPa"
+        if self.standard.standard_name:
+            std_label = f"{self.standard.standard_name} - {std_label}"
+
+        results.append((f"- STANDART ÇEVRİM BİLGİLERİ ({std_label}) -", "", ""))
+        results.append((
+            "Standart Koşullar",
+            f"{self.standard.reference_temperature:.2f} K, {std_pressure_kpa:.3f} kPa",
+            "-"
+        ))
         
         # Standard density
         std_density_val, std_density_unit = ResultUnitConverter.convert_density(
@@ -243,6 +269,9 @@ class CalculationResult(BaseModel):
                 
                 results.append(("Normal Hacim (NCM)", f"{vol_norm_val:.4f}", vol_norm_unit))
                 results.append(("", f"@ 0°C, 101.325 kPa", "(Normal)"))
+            elif self.volume_conversion.normal_volume_error:
+                results.append(("Normal Hacim (NCM)", "Hesaplanamadı", "-"))
+                results.append(("Hata Detayı", self.volume_conversion.normal_volume_error, ""))
         
         return results
     

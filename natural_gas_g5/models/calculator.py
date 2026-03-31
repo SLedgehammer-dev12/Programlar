@@ -20,7 +20,8 @@ from natural_gas_g5.models.calculation_result import (
     ActualConditionResults,
     StandardConditionResults,
     HeatingValues,
-    VolumeConversion
+    VolumeConversion,
+    PhaseEnvelopeData
 )
 from natural_gas_g5.models.heating_value_db import get_reference_heating_values
 
@@ -45,20 +46,16 @@ class ThermoCalculator:
     Provides fallback mechanisms for different backends.
     """
     
-    def __init__(self, backend: str = "HEOS"):
+    def __init__(self):
         """
         Initialize calculator.
         
-        Args:
-            backend: CoolProp backend to use (HEOS, SRK, or PR)
-            
         Raises:
             BackendNotAvailableError: If CoolProp is not installed
         """
         if not COOLPROP_AVAILABLE:
             raise BackendNotAvailableError("CoolProp")
         
-        self.backend = backend
         self.logger = logging.getLogger(__name__)
         
     def calculate_properties(
@@ -66,6 +63,7 @@ class ThermoCalculator:
         mixture: GasMixture,
         temperature_k: float,
         pressure_pa: float,
+        backend: str = "HEOS",
         volume_m3: Optional[float] = None,
         standard_T: float = config.T_STANDARD,
         standard_P: float = config.P_STANDARD,
@@ -78,6 +76,7 @@ class ThermoCalculator:
             mixture: Gas mixture definition
             temperature_k: Temperature in Kelvin
             pressure_pa: Pressure in Pascals
+            backend: CoolProp backend (HEOS, SRK, PR)
             volume_m3: Optional volume in cubic meters for conversion
             standard_T: Reference standard temperature (K)
             standard_P: Reference standard pressure (Pa)
@@ -94,7 +93,7 @@ class ThermoCalculator:
         mixture.validate_total()
         
         # Get backend to use
-        backend = self._select_backend(mixture)
+        backend = self._select_backend(mixture, backend)
         
         try:
             # Calculate properties
@@ -120,6 +119,7 @@ class ThermoCalculator:
         mixture: GasMixture,
         temperature_k: float,
         pressure_pa: float,
+        preferred_backend: str = "HEOS",
         volume_m3: Optional[float] = None,
         standard_T: float = config.T_STANDARD,
         standard_P: float = config.P_STANDARD,
@@ -135,6 +135,7 @@ class ThermoCalculator:
             mixture: Gas mixture
             temperature_k: Temperature (K)
             pressure_pa: Pressure (Pa)
+            preferred_backend: Preferred backend to try first
             volume_m3: Optional volume (m³)
             standard_T: Reference standard temperature (K)
             standard_P: Reference standard pressure (Pa)
@@ -143,7 +144,7 @@ class ThermoCalculator:
             Tuple of (result, backend_used) or (None, "")
         """
         # Determine backend order
-        backends = self._get_backend_order(mixture)
+        backends = self._get_backend_order(mixture, preferred_backend)
         
         result = None
         used_backend = ""
@@ -171,17 +172,18 @@ class ThermoCalculator:
         
         return result, used_backend
     
-    def _select_backend(self, mixture: GasMixture) -> str:
+    def _select_backend(self, mixture: GasMixture, requested_backend: str) -> str:
         """
         Select appropriate backend based on mixture compatibility.
         
         Args:
             mixture: Gas mixture to check
+            requested_backend: Backend requested
             
         Returns:
             Backend name to use
         """
-        if self.backend == "HEOS":
+        if requested_backend == "HEOS":
             incompatible = mixture.check_heos_compatibility()
             if incompatible:
                 self.logger.warning(
@@ -189,23 +191,24 @@ class ThermoCalculator:
                     "Consider using SRK or PR."
                 )
         
-        return self.backend
+        return requested_backend
     
-    def _get_backend_order(self, mixture: GasMixture) -> List[str]:
+    def _get_backend_order(self, mixture: GasMixture, preferred: str) -> List[str]:
         """
         Get prioritized list of backends to try.
         
         Args:
             mixture: Gas mixture
+            preferred: Preferred backend
             
         Returns:
             Ordered list of backend names
         """
-        backends = [self.backend]
+        backends = [preferred]
         
         # Skip HEOS if incompatible
         incompatible = mixture.check_heos_compatibility()
-        if incompatible and self.backend == "HEOS":
+        if incompatible and preferred == "HEOS":
             backends = ["SRK", "PR"]
         else:
             # Add fallbacks
@@ -274,6 +277,9 @@ class ThermoCalculator:
                 mixture,
                 backend
             )
+            
+        # Calculate Phase Envelope
+        phase_envelope = self._calculate_phase_envelope(state, backend)
         
         # Package results
         return CalculationResult(
@@ -281,7 +287,8 @@ class ThermoCalculator:
             actual=actual_results,
             standard=standard_results,
             heating=heating_results,
-            volume_conversion=volume_results
+            volume_conversion=volume_results,
+            phase_envelope=phase_envelope
         )
     
     def _create_state(
@@ -327,6 +334,38 @@ class ThermoCalculator:
             
         except Exception as e:
             raise StateUpdateError(backend, temperature_k, pressure_pa, e)
+            
+    def _calculate_phase_envelope(
+        self,
+        state: 'CP.AbstractState',
+        backend: str
+    ) -> Optional[PhaseEnvelopeData]:
+        """
+        Calculate phase envelope for the gas mixture.
+        """
+        try:
+            self.logger.debug(f"Attempting phase envelope calculation with {backend}")
+            
+            # Try to build the phase envelope. Sometimes this fails for heavy mixtures.
+            state.build_phase_envelope("")
+            
+            # Extract the actual data arrays
+            pe_data = state.get_phase_envelope_data()
+            T_array = list(pe_data.T)
+            P_array = list(pe_data.p)
+            
+            if not T_array or not P_array:
+                return None
+                
+            return PhaseEnvelopeData(
+                temperature_k=T_array,
+                pressure_pa=P_array,
+                cricondentherm_t=max(T_array),
+                cricondenbar_p=max(P_array)
+            )
+        except Exception as e:
+            self.logger.warning(f"Phase envelope failed with {backend}: {e}")
+            return None
     
     def _calculate_actual_conditions(
         self,
@@ -367,6 +406,8 @@ class ThermoCalculator:
             self.logger.warning(f"Speed of sound calculation failed: {e}")
         
         return ActualConditionResults(
+            temperature=state.T(),
+            pressure=state.p(),
             density=density,
             molar_mass=molar_mass,
             compressibility_factor=z_factor,
@@ -410,8 +451,12 @@ class ThermoCalculator:
             # to be scientifically correct for SG
             rho_air = CP.PropsSI('D', 'T', T_std, 'P', P_std, 'Air')
         except:
-            rho_air = 1.225  # kg/m³ (approximate at 15C)
-            self.logger.warning("Could not get air density from CoolProp, using approximate value")
+            # Ideal Gas Law for Air: R_air = 287.058 J/(kg.K)
+            rho_air = P_std / (287.058 * T_std)
+            self.logger.warning(
+                f"Could not get air density from CoolProp, using Ideal Gas Law "
+                f"(rho={rho_air:.3f} kg/m3 for T={T_std}K, P={P_std}Pa)"
+            )
         
         sg = rho_std / rho_air
         
@@ -700,6 +745,7 @@ class ThermoCalculator:
         
         # Calculate Normal Volume (NCM) @ 0°C, 1 atm
         volume_norm = None
+        error_msg = None
         try:
             # Create state at Normal conditions
             state_norm = self._create_state(
@@ -712,10 +758,12 @@ class ThermoCalculator:
             volume_norm = mass / rho_norm
         except Exception as e:
             self.logger.warning(f"Failed to calculate NCM volume: {e}")
+            error_msg = "0°C'de olası yoğuşma (faz değişimi) veya hesaplama hatası"
         
         return VolumeConversion(
             actual_volume=volume_actual,
             mass=mass,
             standard_volume=volume_std,
-            normal_volume=volume_norm
+            normal_volume=volume_norm,
+            normal_volume_error=error_msg
         )

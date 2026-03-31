@@ -6,17 +6,23 @@ Handles user inputs for gas composition, thermodynamic conditions, and calculati
 
 import tkinter as tk
 from tkinter import ttk
+import customtkinter as ctk
 from typing import List, Tuple, Optional
 import logging
+import matplotlib
+matplotlib.use("TkAgg")
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 
 from natural_gas_g5.models.gas_data import GasComponent, GasMixture
 from natural_gas_g5.core.exceptions import ValidationError
 from natural_gas_g5.core import validators
 from natural_gas_g5.core import converters
+from natural_gas_g5.core.converters import VolumeUnit, convert_volume_to_m3
 from natural_gas_g5.config.settings import config
 
 
-class InputPanel(ttk.Frame):
+class InputPanel(ctk.CTkFrame):
     """
     Input panel for gas composition and calculation parameters.
     
@@ -51,262 +57,307 @@ class InputPanel(ttk.Frame):
     
     def _create_composition_section(self):
         """Create gas composition input widgets."""
-        # Frame
-        comp_frame = ttk.LabelFrame(
-            self,
-            text="1. Gaz Kompozisyonu",
-            padding="10"
-        )
+        comp_frame = ctk.CTkFrame(self)
         comp_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
+        # Title
+        ctk.CTkLabel(comp_frame, text="1. Gaz Kompozisyonu", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=(5, 0))
+        
         # Layout: Left (Gas List), Right (Composition)
-        paned = ttk.PanedWindow(comp_frame, orient=tk.HORIZONTAL)
-        paned.pack(fill=tk.BOTH, expand=True)
+        paned = tk.PanedWindow(comp_frame, orient=tk.HORIZONTAL, bg="gray20", sashwidth=4)
+        paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         
         # Left Panel: Gas Selection
-        left_frame = ttk.Frame(paned)
-        paned.add(left_frame, weight=1)
+        left_frame = ctk.CTkFrame(paned, fg_color="transparent")
+        paned.add(left_frame, minsize=200)
         
         # Search box
-        ttk.Label(left_frame, text="Gaz Ara:").pack(anchor="w")
+        ctk.CTkLabel(left_frame, text="Gaz Ara:").pack(anchor="w")
         self.search_var = tk.StringVar()
         self.search_var.trace("w", self._on_gas_search)
-        search_entry = ttk.Entry(left_frame, textvariable=self.search_var)
+        search_entry = ctk.CTkEntry(left_frame, textvariable=self.search_var)
         search_entry.pack(fill=tk.X, pady=(0, 5))
         
-        # Gas Listbox
-        list_frame = ttk.Frame(left_frame)
-        list_frame.pack(fill=tk.BOTH, expand=True)
+        # Filter toggle
+        self.filter_var = ctk.BooleanVar(value=True) # True = Common, False = All
+        self.filter_switch = ctk.CTkSwitch(
+            left_frame, 
+            text="Sadece Yaygın Gazlar", 
+            variable=self.filter_var,
+            font=ctk.CTkFont(size=11),
+            command=self._on_gas_search
+        )
+        self.filter_switch.pack(anchor="w", pady=(0, 5))
         
-        scrollbar = ttk.Scrollbar(list_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # Gas Listbox (fallback to standard tk.Listbox for now, CTk doesn't have a native one)
+        list_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
+        list_frame.pack(fill=tk.BOTH, expand=True)
         
         self.gas_listbox = tk.Listbox(
             list_frame,
             selectmode=tk.SINGLE,
-            yscrollcommand=scrollbar.set,
+            bg="#2b2b2b",
+            fg="white",
+            selectbackground="#1f538d",
+            relief="flat",
             height=6
         )
         self.gas_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.gas_listbox.yview)
+        
+        scrollbar = ctk.CTkScrollbar(list_frame, command=self.gas_listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.gas_listbox.configure(yscrollcommand=scrollbar.set)
         
         # Initial population
         self._update_gas_list()
         
         # Add Button
-        ttk.Button(
+        ctk.CTkButton(
             left_frame,
             text="Ekle >>",
             command=self._on_add_gas
         ).pack(fill=tk.X, pady=5)
         
-        # Right Panel: Selected Composition
-        right_frame = ttk.Frame(paned)
-        paned.add(right_frame, weight=2)
+        # Right Panel: Selected Composition (Inline Editing)
+        right_frame = ctk.CTkFrame(paned, fg_color="transparent")
+        paned.add(right_frame, minsize=250)
         
-        # Treeview
-        cols = ("Bileşen", "Oran (%)")
-        self.tree = ttk.Treeview(
-            right_frame,
-            columns=cols,
-            show="headings",
-            height=6
-        )
+        # Headers
+        header_frame = ctk.CTkFrame(right_frame, fg_color="transparent")
+        header_frame.pack(fill=tk.X, padx=5, pady=(0, 2))
+        ctk.CTkLabel(header_frame, text="Bileşen", width=120, anchor="w").pack(side=tk.LEFT)
+        ctk.CTkLabel(header_frame, text="Oran (%)", width=80, anchor="w").pack(side=tk.LEFT)
         
-        self.tree.heading("Bileşen", text="Bileşen")
-        self.tree.heading("Oran (%)", text="Oran (%)")
+        # Scrollable Frame for rows
+        self.comp_scroll_frame = ctk.CTkScrollableFrame(right_frame, height=150)
+        self.comp_scroll_frame.pack(fill=tk.BOTH, expand=True)
         
-        self.tree.column("Bileşen", width=120)
-        self.tree.column("Oran (%)", width=80)
+        # Dictionary to store row widgets: gas_name -> {'frame': frame, 'entry': entry, 'var': var}
+        self.comp_rows = {}
         
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        # Scrollbar for tree
-        tree_scroll = ttk.Scrollbar(
-            right_frame,
-            orient=tk.VERTICAL,
-            command=self.tree.yview
-        )
-        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree.configure(yscrollcommand=tree_scroll.set)
-        
-        # Bind double click to edit
-        self.tree.bind("<Double-1>", self._on_double_click_composition)
-        
-        # Remove and Clear Buttons
-        btn_frame = ttk.Frame(right_frame)
+        btn_frame = ctk.CTkFrame(right_frame, fg_color="transparent")
         btn_frame.pack(fill=tk.X, pady=5)
         
-        ttk.Button(
-            btn_frame,
-            text="Seçileni Sil",
-            command=self._on_remove_gas
-        ).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 2))
+        # Presets
+        ctk.CTkLabel(btn_frame, text="Şablon:").pack(side=tk.LEFT, padx=(0, 5))
         
-        ttk.Button(
+        self.preset_var = tk.StringVar(value="Seçiniz...")
+        preset_combo = ctk.CTkComboBox(
+            btn_frame, 
+            variable=self.preset_var,
+            values=["Seçiniz...", "Tipik Doğal Gaz", "BOTAŞ Standardı", "Zengin Gaz (LNG)"],
+            state="readonly",
+            command=self._on_preset_selected,
+            width=135
+        )
+        preset_combo.pack(side=tk.LEFT)
+        
+        ctk.CTkButton(
             btn_frame,
-            text="Tümünü Temizle",
-            command=self._on_clear_all
-        ).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 0))
+            text="Temizle",
+            command=self._on_clear_all,
+            fg_color="#F44336",
+            hover_color="#D32F2F",
+            width=60
+        ).pack(side=tk.RIGHT)
         
         # Total label
-        self.total_label = ttk.Label(
+        self.total_label = ctk.CTkLabel(
             comp_frame,
             text="Toplam: 0.00%",
-            font=('TkDefaultFont', 9, 'bold')
+            font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.total_label.pack(anchor="e", pady=5)
+        self.total_label.pack(anchor="e", padx=10, pady=(0, 5))
         
         # Fraction type selector
-        type_frame = ttk.Frame(comp_frame)
-        type_frame.pack(fill=tk.X)
+        type_frame = ctk.CTkFrame(comp_frame, fg_color="transparent")
+        type_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         
-        ttk.Label(type_frame, text="Oran Tipi:").pack(side=tk.LEFT)
+        ctk.CTkLabel(type_frame, text="Oran Tipi:").pack(side=tk.LEFT)
         
         self.fraction_type_var = tk.StringVar(value="molar")
-        ttk.Radiobutton(
+        ctk.CTkRadioButton(
             type_frame,
             text="Molar %",
             variable=self.fraction_type_var,
             value="molar"
         ).pack(side=tk.LEFT, padx=10)
         
-        ttk.Radiobutton(
+        ctk.CTkRadioButton(
             type_frame,
             text="Kütlesel %",
             variable=self.fraction_type_var,
             value="mass"
         ).pack(side=tk.LEFT)
+        
+        # Third Panel: Pie Chart
+        pie_frame = ctk.CTkFrame(paned, fg_color="transparent")
+        paned.add(pie_frame, minsize=200)
+        
+        self.pie_fig = Figure(figsize=(3, 3), dpi=80)
+        self.pie_ax = self.pie_fig.add_subplot(111)
+        
+        bg_col = '#2b2b2b' if ctk.get_appearance_mode() == "Dark" else '#f0f0f0'
+        self.pie_fig.patch.set_facecolor(bg_col)
+        self.pie_ax.set_facecolor(bg_col)
+        
+        self.pie_canvas = FigureCanvasTkAgg(self.pie_fig, master=pie_frame)
+        self.pie_canvas.draw()
+        self.pie_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Initial draw
+        self._update_pie_chart()
 
     def _create_standard_section(self):
         """Create standard condition selection widgets."""
-        frame = ttk.LabelFrame(
-            self,
-            text="2. Referans Standart Koşullar",
-            padding="10"
-        )
+        frame = ctk.CTkFrame(self)
         frame.pack(fill=tk.X, pady=(0, 10))
         
-        # Standard Selection
-        ttk.Label(frame, text="Standart Seçimi:").grid(row=0, column=0, sticky="w", padx=5)
+        ctk.CTkLabel(frame, text="2. Referans Standart Koşullar", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(5, 5))
         
-        self.standard_var = tk.StringVar()
+        # Standard Selection
+        ctk.CTkLabel(frame, text="Standart Seçimi:").grid(row=1, column=0, sticky="w", padx=10, pady=(0, 5))
+        
+        self.standard_var = ctk.StringVar()
         standards = list(config.STANDARD_CONDITIONS.keys()) + ["Özel..."]
         
-        self.standard_combo = ttk.Combobox(
+        self.standard_combo = ctk.CTkComboBox(
             frame,
-            textvariable=self.standard_var,
+            variable=self.standard_var,
             values=standards,
             state="readonly",
-            width=30
+            width=250,
+            command=self._on_standard_change
         )
-        self.standard_combo.grid(row=0, column=1, sticky="w", padx=5)
-        self.standard_combo.current(0)  # Select first (ISO)
-        self.standard_combo.bind('<<ComboboxSelected>>', self._on_standard_change)
+        self.standard_combo.grid(row=1, column=1, sticky="w", padx=10, pady=(0, 5))
+        self.standard_combo.set(standards[0])  # Select first (ISO)
         
         # Info label
-        self.std_info_label = ttk.Label(
+        self.std_info_label = ctk.CTkLabel(
             frame,
             text="",
-            font=('TkDefaultFont', 8),
-            foreground="#666"
+            font=ctk.CTkFont(size=11),
+            text_color="gray"
         )
-        self.std_info_label.grid(row=1, column=0, columnspan=2, sticky="w", padx=5, pady=(5, 0))
+        self.std_info_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 5))
         
         # Trigger initial update
         self._on_standard_change()
 
     def _create_conditions_section(self):
         """Create thermodynamic conditions input widgets."""
-        frame = ttk.LabelFrame(
-            self,
-            text="3. İşletme Koşulları",
-            padding="10"
-        )
+        frame = ctk.CTkFrame(self)
         frame.pack(fill=tk.X, pady=(0, 10))
         
+        ctk.CTkLabel(frame, text="3. İşletme Koşulları", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=(5, 5))
+        
+        inputs_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        inputs_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
         # Temperature
-        ttk.Label(frame, text="Sıcaklık:").grid(row=0, column=0, sticky="w", padx=5)
+        ctk.CTkLabel(inputs_frame, text="Sıcaklık:").grid(row=0, column=0, sticky="w", padx=(0, 5))
         
         self.temp_var = tk.DoubleVar(value=15.0)
-        ttk.Entry(frame, textvariable=self.temp_var, width=10).grid(row=0, column=1, padx=5)
+        ctk.CTkEntry(inputs_frame, textvariable=self.temp_var, width=80).grid(row=0, column=1, padx=(0, 5))
         
-        self.temp_unit_var = tk.StringVar(value="°C")
+        self.temp_unit_var = ctk.StringVar(value="°C")
         temp_units = ["°C", "°F", "K"]
-        ttk.Combobox(
-            frame,
-            textvariable=self.temp_unit_var,
+        ctk.CTkComboBox(
+            inputs_frame,
+            variable=self.temp_unit_var,
             values=temp_units,
             state="readonly",
-            width=5
-        ).grid(row=0, column=2, padx=5)
+            width=70
+        ).grid(row=0, column=2, padx=(0, 15))
         
         # Pressure
-        ttk.Label(frame, text="Basınç:").grid(row=0, column=3, sticky="w", padx=5)
+        ctk.CTkLabel(inputs_frame, text="Basınç:").grid(row=0, column=3, sticky="w", padx=(0, 5))
         
         self.press_var = tk.DoubleVar(value=1.01325)
-        ttk.Entry(frame, textvariable=self.press_var, width=10).grid(row=0, column=4, padx=5)
+        ctk.CTkEntry(inputs_frame, textvariable=self.press_var, width=80).grid(row=0, column=4, padx=(0, 5))
         
-        self.press_unit_var = tk.StringVar(value="bar(a)")
+        self.press_unit_var = ctk.StringVar(value="bar(a)")
         press_units = ["bar(a)", "bar(g)", "kPa", "MPa", "psi(a)", "psi(g)", "atm"]
-        ttk.Combobox(
-            frame,
-            textvariable=self.press_unit_var,
+        ctk.CTkComboBox(
+            inputs_frame,
+            variable=self.press_unit_var,
             values=press_units,
             state="readonly",
-            width=8
-        ).grid(row=0, column=5, padx=5)
+            width=90
+        ).grid(row=0, column=5)
     
     def _create_volume_method_section(self):
         """Create volume and method selection widgets."""
-        volume_frame = ttk.LabelFrame(self, text="3. Hacim ve Metot", padding="10")
-        volume_frame.pack(fill=tk.X, pady=10)
+        volume_frame = ctk.CTkFrame(self)
+        volume_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ctk.CTkLabel(volume_frame, text="4. Hacim ve Metot", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=3, padx=10, pady=(5, 5), sticky="w")
         
         # Volume (optional)
-        ttk.Label(volume_frame, text="Hacim (ACM - Gerçek m³):").grid(
-            row=0, column=0, padx=5, pady=5, sticky="w"
+        ctk.CTkLabel(volume_frame, text="Hacim (ACM - Gerçek m³):").grid(
+            row=1, column=0, padx=10, pady=(0, 5), sticky="w"
         )
         
-        self.volume_entry = ttk.Entry(volume_frame, width=12)
-        self.volume_entry.grid(row=0, column=1, padx=5, pady=5)
+        self.volume_entry = ctk.CTkEntry(volume_frame, width=100)
+        self.volume_entry.grid(row=1, column=1, padx=(0, 5), pady=(0, 5), sticky="w")
         
-        ttk.Label(volume_frame, text="m³").grid(row=0, column=2, padx=5, pady=5, sticky="w")
+        self.vol_unit_var = ctk.StringVar(value="m³")
+        vol_units = [u.value for u in VolumeUnit]
+        ctk.CTkComboBox(
+            volume_frame,
+            variable=self.vol_unit_var,
+            values=vol_units,
+            state="readonly",
+            width=70
+        ).grid(row=1, column=2, padx=(0, 10), pady=(0, 5), sticky="w")
         
         # Backend method
-        ttk.Label(volume_frame, text="Yöntem:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        ctk.CTkLabel(volume_frame, text="Yöntem:").grid(row=2, column=0, padx=10, pady=(0, 10), sticky="w")
         
-        self.method = tk.StringVar(value=config.DEFAULT_BACKEND)
+        self.method = ctk.StringVar(value=config.DEFAULT_BACKEND)
         methods = config.AVAILABLE_BACKENDS
-        self.method_combo = ttk.Combobox(
+        self.method_combo = ctk.CTkComboBox(
             volume_frame,
-            textvariable=self.method,
+            variable=self.method,
             values=methods,
             state="readonly",
-            width=15
+            width=175
         )
-        self.method_combo.grid(row=1, column=1, padx=5, pady=5, columnspan=2, sticky="ew")
-        self.method_combo.grid(row=1, column=1, padx=5, pady=5, columnspan=2, sticky="ew")
+        self.method_combo.grid(row=2, column=1, columnspan=2, padx=(0, 10), pady=(0, 10), sticky="w")
+
+    def _get_filtered_gas_list(self):
+        """Return the gas list based on the filter switch."""
+        common = {
+            "Methane", "Ethane", "Propane", "n-Butane", "Isobutane",
+            "n-Pentane", "Isopentane", "n-Hexane", "n-Heptane", "n-Octane", "n-Nonane", "n-Decane",
+            "CarbonDioxide", "Nitrogen", "HydrogenSulfide",
+            "Water", "Helium", "Hydrogen", "Oxygen", "Argon", "CarbonMonoxide"
+        }
+        if self.filter_var.get():
+            return [g for g in self.gas_list if g in common]
+        return self.gas_list
 
     def _update_gas_list(self):
         """Update gas listbox with available gases."""
         self.gas_listbox.delete(0, tk.END)
-        for gas in self.gas_list:
+        for gas in self._get_filtered_gas_list():
             self.gas_listbox.insert(tk.END, gas)
     
     # Event handlers
     
     def _on_gas_search(self, *args):
-        """Handle gas search box key release."""
+        """Handle gas search box key release and switch toggle."""
         search_term = self.search_var.get().lower()
         
         self.gas_listbox.delete(0, tk.END)
+        base_list = self._get_filtered_gas_list()
         
         if search_term:
-            filtered = [gas for gas in self.gas_list if search_term in gas.lower()]
+            filtered = [gas for gas in base_list if search_term in gas.lower()]
             for gas in filtered:
                 self.gas_listbox.insert(tk.END, gas)
         else:
-            for gas in self.gas_list:
+            for gas in base_list:
                 self.gas_listbox.insert(tk.END, gas)
     
     def _on_add_gas(self):
@@ -320,110 +371,131 @@ class InputPanel(ttk.Frame):
         gas_name = self.gas_listbox.get(selection[0])
         
         # Check for duplicates
-        existing_items = self.tree.get_children()
-        for item in existing_items:
-            existing_name = self.tree.item(item)['values'][0]
-            if existing_name == gas_name:
-                from natural_gas_g5.ui.dialogs import show_warning
-                show_warning("Giriş Hatası", f"{gas_name} zaten ekli.")
-                return
-
-        # Prompt for fraction (simple dialog for now, or assume user edits later)
-        # Ideally we have an entry, but current design has entry elsewhere or removed
-        # Let's add with default 0 and ask user to edit, OR bring back the simple fraction entry
-        pass # Wait, previous design had a prompt? Using a dialog is cleaner for now to avoid messy UI
-        
-        # Better: Re-implement the fraction input that was in the design?
-        # The new design has "Ekle >>" button. Let's assume it adds with 0 or asks?
-        # Let's use a simple input dialog here for stability
-        
-        from tkinter import simpledialog
-        fraction_str = simpledialog.askstring("Oran Girişi", f"{gas_name} için oran girin:")
-        
-        if not fraction_str: return
-        
-        try:
-             fraction = float(fraction_str.replace(',', '.'))
-             validators.validate_gas_fraction(fraction)
-             self.tree.insert("", tk.END, values=(gas_name, f"{fraction:.4f}"))
-             self._update_total_label()
-        except ValueError:
-             from natural_gas_g5.ui.dialogs import show_warning
-             show_warning("Hata", "Geçersiz sayısal değer.")
-        except Exception as e:
-             from natural_gas_g5.ui.dialogs import show_warning
-             show_warning("Hata", str(e))
-
-    def _on_remove_gas(self):
-        """Handle remove gas button click."""
-        selected_items = self.tree.selection()
-        
-        if not selected_items:
+        if gas_name in self.comp_rows:
             from natural_gas_g5.ui.dialogs import show_warning
-            show_warning("Seçim Hatası", "Lütfen silmek için tablodan bir gaz seçin.")
+            show_warning("Giriş Hatası", f"{gas_name} zaten ekli.")
             return
+
+        # Calculate remaining percentage for default value
+        current_total = sum(float(row['var'].get()) for row in self.comp_rows.values() if row['var'].get())
+        remaining = max(0.0, 100.0 - current_total)
+        default_val = f"{remaining:.4f}" if remaining > 0 else "0.0000"
         
-        for item in selected_items:
-            self.tree.delete(item)
+        self._add_gas_row(gas_name, default_val)
         self._update_total_label()
+
+    def _add_gas_row(self, gas_name: str, fraction_value: str):
+        """Add a row to the composition scrollable frame."""
+        row_frame = ctk.CTkFrame(self.comp_scroll_frame, fg_color="transparent")
+        row_frame.pack(fill=tk.X, pady=2)
+        
+        # Name Label
+        ctk.CTkLabel(row_frame, text=gas_name, width=120, anchor="w").pack(side=tk.LEFT)
+        
+        # Fraction Entry
+        var = ctk.StringVar(value=fraction_value)
+        var.trace_add("write", lambda *args: self._update_total_label())
+        
+        entry = ctk.CTkEntry(row_frame, textvariable=var, width=80)
+        entry.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # Remove button
+        def remove_row():
+            self._on_remove_gas(gas_name)
+            
+        rm_btn = ctk.CTkButton(row_frame, text="X", width=30, fg_color="transparent", text_color="#F44336", hover_color="#303030", command=remove_row)
+        rm_btn.pack(side=tk.LEFT)
+        
+        self.comp_rows[gas_name] = {
+            'frame': row_frame,
+            'entry': entry,
+            'var': var
+        }
+
+    def _on_remove_gas(self, gas_name: str):
+        """Handle remove gas button click."""
+        if gas_name in self.comp_rows:
+            self.comp_rows[gas_name]['frame'].destroy()
+            del self.comp_rows[gas_name]
+            self._update_total_label()
 
     def _on_clear_all(self):
         """Clear all gases from composition."""
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        for row in list(self.comp_rows.values()):
+            row['frame'].destroy()
+        self.comp_rows.clear()
         self._update_total_label()
+        
+    def _on_preset_selected(self, choice):
+        """Auto-fill gas composition based on selected preset."""
+        if choice == "Seçiniz...":
+            return
+            
+        presets = {
+            "Tipik Doğal Gaz": {"Methane": 94.0, "Ethane": 4.0, "Propane": 1.0, "Nitrogen": 0.5, "CarbonDioxide": 0.5},
+            "Zengin Gaz (LNG)": {"Methane": 88.0, "Ethane": 8.0, "Propane": 3.0, "n-Butane": 1.0},
+            "BOTAŞ Standardı": {"Methane": 92.5, "Ethane": 5.0, "Propane": 1.5, "n-Butane": 0.5, "Nitrogen": 0.5}
+        }
+        
+        if choice in presets:
+            self._on_clear_all()
+            for gas, val in presets[choice].items():
+                # Ensure the gas is added even if not in the visible listbox
+                self._add_gas_row(gas, str(val))
+            self._update_total_label()
+            
+        self.preset_var.set("Seçiniz...")
         
     def _update_total_label(self):
         """Update total composition label."""
         total = 0.0
-        for item in self.tree.get_children():
+        for gas_name, row in self.comp_rows.items():
             try:
-                val = float(self.tree.item(item)['values'][1])
+                val = float(row['var'].get() or 0)
                 total += val
-            except: pass
+            except ValueError:
+                pass
             
-        self.total_label.config(text=f"Toplam: {total:.4f}%")
+        self.total_label.configure(text=f"Toplam: {total:.4f}%")
         if abs(total - 100.0) > 0.0001:
-            self.total_label.config(foreground="red")
+            self.total_label.configure(text_color="#F44336") # Red
         else:
-            self.total_label.config(foreground="green")
-
-    def _on_double_click_composition(self, event):
-        """Handle double click on composition tree to edit fraction."""
-        region = self.tree.identify("region", event.x, event.y)
-        if region != "cell": return
-        
-        column = self.tree.identify_column(event.x)
-        if column != "#2": return # Only fraction
-        
-        item = self.tree.identify_row(event.y)
-        if not item: return
-        
-        current_val = self.tree.item(item)['values'][1]
-        bbox = self.tree.bbox(item, column)
-        
-        entry = ttk.Entry(self.tree)
-        entry.place(x=bbox[0], y=bbox[1], width=bbox[2], height=bbox[3])
-        entry.insert(0, str(current_val))
-        entry.select_range(0, tk.END)
-        entry.focus()
-        
-        def save(event=None):
+            self.total_label.configure(text_color="#4CAF50") # Green
+            
+        self._update_pie_chart()
+            
+    def _update_pie_chart(self):
+        """Update pie chart representation of gas mixture."""
+        self.pie_ax.clear()
+        labels = []
+        sizes = []
+        for gas_name, row in self.comp_rows.items():
             try:
-                val = float(entry.get().replace(',', '.'))
-                validators.validate_gas_fraction(val)
-                values = list(self.tree.item(item, "values"))
-                values[1] = f"{val:.4f}"
-                self.tree.item(item, values=values)
-                self._update_total_label()
-                entry.destroy()
-            except Exception as e:
-                from natural_gas_g5.ui.dialogs import show_warning
-                show_warning("Hata", "Geçersiz değer")
-                entry.destroy() # Or keep focus? destroy for now to avoid lock
+                val = float(row['var'].get().replace(',', '.') or 0)
+                if val > 0.01:
+                    labels.append(gas_name.split(' ')[0])
+                    sizes.append(val)
+            except ValueError:
+                pass
         
-        entry.bind("<Return>", save)
-        entry.bind("<FocusOut>", lambda e: entry.destroy())
+        is_dark = ctk.get_appearance_mode() == "Dark"
+        text_color = 'white' if is_dark else 'black'
+        bg_col = '#2b2b2b' if is_dark else '#f0f0f0'
+        
+        if sum(sizes) > 0:
+            wedges, texts, autotexts = self.pie_ax.pie(
+                sizes, labels=labels, autopct='%1.1f%%', 
+                startangle=90, textprops={'fontsize': 8}
+            )
+            for text in texts: text.set_color(text_color)
+            for autotext in autotexts: autotext.set_color("black")
+        else:
+            # Empty state
+            wedges, texts = self.pie_ax.pie([1], labels=["Bileşen Yok"], colors=[bg_col])
+            for text in texts: text.set_color(text_color)
+            
+        self.pie_fig.tight_layout()
+        self.pie_canvas.draw()
     
     # Public methods for getting inputs
     
@@ -443,17 +515,17 @@ class InputPanel(ttk.Frame):
             p_psi = p_val / 6894.76
             
             info_text = f"Referans: {t_c:.2f}°C, {p_kpa:.3f} kPa ({p_psi:.3f} psi)"
-            self.std_info_label.config(text=info_text)
+            self.std_info_label.configure(text=info_text)
             
             # Auto-update conditions if user hasn't manually modified them yet 
             # (Optional: for now we just show info, maybe we can add a checkbox "Sync conditions")
             # Or better: We set these as the "Standard" parameters that passed to calculator
         else:
-            self.std_info_label.config(text="Özel tanımlı standart koşullar")
+            self.std_info_label.configure(text="Özel tanımlı standart koşullar")
 
     def get_mixture(self) -> GasMixture:
         """
-        Get gas mixture from composition tree.
+        Get gas mixture from composition inputs.
         
         Returns:
             GasMixture object
@@ -463,11 +535,13 @@ class InputPanel(ttk.Frame):
         """
         # Collect components
         components = []
-        for item in self.tree.get_children():
-            values = self.tree.item(item)['values']
-            name = values[0]
-            fraction = float(values[1])
-            components.append(GasComponent(name=name, fraction=fraction))
+        for gas_name, row in self.comp_rows.items():
+            try:
+                fraction_str = row['var'].get().replace(',', '.')
+                fraction = float(fraction_str)
+                components.append(GasComponent(name=gas_name, fraction=fraction))
+            except ValueError:
+                raise ValidationError("Gaz Kompozisyonu", f"{gas_name} için geçersiz sayısal değer.")
         
         if not components:
             raise ValidationError("Gaz Kompozisyonu", "En az bir gaz bileşeni eklemelisiniz.")
@@ -512,7 +586,9 @@ class InputPanel(ttk.Frame):
         try:
             val = self.temp_var.get()
             unit = self.temp_unit_var.get()
-            return converters.convert_temperature_to_K(val, unit)
+            temperature_k = converters.convert_temperature_to_K(val, unit)
+            validators.validate_temperature(temperature_k)
+            return temperature_k
         except Exception as e:
             if isinstance(e, ValidationError): raise
             raise ValidationError("Sıcaklık", "Geçersiz değer")
@@ -530,7 +606,9 @@ class InputPanel(ttk.Frame):
         try:
             val = self.press_var.get()
             unit = self.press_unit_var.get()
-            return converters.convert_pressure_to_Pa(val, unit)
+            pressure_pa = converters.convert_pressure_to_Pa(val, unit)
+            validators.validate_pressure(pressure_pa)
+            return pressure_pa
         except Exception as e:
             if isinstance(e, ValidationError): raise
             raise ValidationError("Basınç", "Geçersiz değer")
@@ -552,15 +630,13 @@ class InputPanel(ttk.Frame):
             return None
             
         try:
-            val = float(vol_str) # Use the value from the entry directly
-            # The original code did not have a vol_unit_var, so we assume m3 for now
-            # If unit conversion is needed, self.vol_unit_var would need to be defined
+            val = float(vol_str.replace(',', '.'))
+            unit = self.vol_unit_var.get()
             
-            # Simple validation for now, more robust validation can be added
-            if not (1e-10 <= val <= 1e9):
-                raise ValidationError("Hacim", "Hacim 1e-10 ile 1e9 arasında olmalıdır.")
-            
-            return val
+            # Convert to m3
+            val_m3 = convert_volume_to_m3(val, unit)
+            validators.validate_volume(val_m3)
+            return val_m3
         except ValueError:
             raise ValidationError("Hacim", "Geçersiz sayısal değer")
     
@@ -594,12 +670,21 @@ class InputPanel(ttk.Frame):
         Returns:
             Dictionary with all input values
         """
+        standard_T, standard_P, standard_name = self.get_standard_conditions()
+        volume_raw = self.volume_entry.get().strip()
+
         return {
             'mixture': self.get_mixture(),
-            'temperature_k': self.get_temperature_k(),
-            'pressure_pa': self.get_pressure_pa(),
-            'volume_m3': self.get_volume_m3(),
+            'temp_k': self.get_temperature_k(),
+            'press_pa': self.get_pressure_pa(),
+            'vol_m3': self.get_volume_m3(),
             'backend': self.get_backend(),
+            'standard_T': standard_T,
+            'standard_P': standard_P,
+            'standard_name': standard_name,
+            'temperature_display': f"{self.temp_var.get()} {self.temp_unit_var.get()}",
+            'pressure_display': f"{self.press_var.get()} {self.press_unit_var.get()}",
+            'volume_display': f"{volume_raw} {self.vol_unit_var.get()}" if volume_raw else None,
         }
     
     def get_save_data(self) -> dict:
@@ -611,11 +696,13 @@ class InputPanel(ttk.Frame):
         """
         # Collect composition
         composition = []
-        for item in self.tree.get_children():
-            values = self.tree.item(item)['values']
+        for gas_name, row in self.comp_rows.items():
+            try:
+                fraction = float(row['var'].get().replace(',','.'))
+            except: fraction = 0.0
             composition.append({
-                "name": values[0],
-                "fraction": float(values[1])
+                "name": gas_name,
+                "fraction": fraction
             })
         
         # Collect other settings
@@ -631,7 +718,10 @@ class InputPanel(ttk.Frame):
                 "value": self.press_var.get(),
                 "unit": self.press_unit_var.get()
             },
-            "volume": self.volume_entry.get().strip() or None,
+            "volume": {
+                "value": self.volume_entry.get().strip(),
+                "unit": self.vol_unit_var.get()
+            },
             "backend": self.method.get()
         }
         
@@ -645,15 +735,14 @@ class InputPanel(ttk.Frame):
             data: Dictionary with saved input values
         """
         # Clear existing composition
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        self._on_clear_all()
         
         # Load composition
         composition = data.get("composition", [])
         for comp in composition:
             name = comp.get("name", "")
             fraction = comp.get("fraction", 0.0)
-            self.tree.insert("", "end", values=(name, f"{fraction:.4f}"))
+            self._add_gas_row(name, f"{fraction:.4f}")
         
         self._update_total_label()
         
@@ -683,9 +772,18 @@ class InputPanel(ttk.Frame):
                 self.press_unit_var.set(press_data["unit"])
         
         # Load volume
-        if "volume" in data and data["volume"]:
-            self.volume_entry.delete(0, "end")
-            self.volume_entry.insert(0, str(data["volume"]))
+        if "volume" in data:
+            vol_data = data["volume"]
+            # Handle backward compatibility (if volume was just a string/float)
+            if isinstance(vol_data, dict):
+                 if "value" in vol_data and vol_data["value"]:
+                     self.volume_entry.delete(0, "end")
+                     self.volume_entry.insert(0, str(vol_data["value"]))
+                 if "unit" in vol_data:
+                     self.vol_unit_var.set(vol_data["unit"])
+            elif vol_data: # Old format
+                 self.volume_entry.delete(0, "end")
+                 self.volume_entry.insert(0, str(vol_data))
         
         # Load backend
         if "backend" in data:

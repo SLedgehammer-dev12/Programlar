@@ -5,11 +5,13 @@ Centralizes all constants, limits, and configurable parameters.
 """
 
 from typing import List, Dict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class AppConfig(BaseModel):
     """Application configuration with validation."""
+
+    model_config = ConfigDict(validate_assignment=True, frozen=False)
     
     # Physical Constants
     P_ATM_BAR: float = Field(
@@ -108,12 +110,20 @@ class AppConfig(BaseModel):
         description="Main window height (pixels)"
     )
     WINDOW_TITLE: str = Field(
-        default="Termodinamik Gaz Karışımı Hesaplayıcı (Sürüm 5.0 - Modüler)",
+        default="Termodinamik Gaz Karışımı Hesaplayıcı (Sürüm 5.3.1 - Modüler)",
         description="Application window title"
     )
     UI_THEME: str = Field(
         default="clam",
-        description="TTK theme name"
+        description="TTK theme name (Deprecated in 5.2)"
+    )
+    CTK_THEME: str = Field(
+        default="System", # System, dark, light
+        description="CustomTkinter appearance mode"
+    )
+    CTK_COLOR_THEME: str = Field(
+        default="blue", # blue, green, dark-blue
+        description="CustomTkinter color theme"
     )
     
     # Logging Configuration
@@ -158,6 +168,18 @@ class AppConfig(BaseModel):
         description="Fallback gas list when CoolProp database unavailable"
     )
     
+    # Filtered Gas List (Natural Gas Focus) to hide refrigerants
+    NATURAL_GAS_FOCUS_LIST: List[str] = Field(
+        default=[
+            "Methane", "Ethane", "Propane", "n-Butane", "Isobutane",
+            "n-Pentane", "Isopentane", "n-Hexane", "n-Heptane", "n-Octane",
+            "n-Nonane", "n-Decane", "Nitrogen", "CarbonDioxide", 
+            "HydrogenSulfide", "Water", "Oxygen", "Argon", "Hydrogen", 
+            "CarbonMonoxide", "Helium", "Air"
+        ],
+        description="Relevant natural gas components for UI filtering"
+    )
+    
     # Conversion Constants
     MMBTU_PER_MJ: float = Field(
         default=9.4781712e-4,
@@ -170,7 +192,7 @@ class AppConfig(BaseModel):
     
     # Update Configuration
     APP_VERSION: str = Field(
-        default="5.1.0",
+        default="5.3.1",
         description="Current application version"
     )
     REPO_USER: str = Field(
@@ -195,12 +217,6 @@ class AppConfig(BaseModel):
     def REPO_URL(self) -> str:
         """Get main repository URL."""
         return f"https://github.com/{self.REPO_USER}/{self.REPO_NAME}/tree/{self.BRANCH_NAME}"
-
-    class Config:
-        """Pydantic configuration."""
-        validate_assignment = True
-        frozen = False  # Allow runtime modifications if needed
-
 
 # Global configuration instance
 config = AppConfig()

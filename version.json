@@ -1,7 +1,7 @@
 {
     "product": "Natural Gas Prop G5",
-    "version": "5.1.0",
-    "date": "2025-12-14",
-    "download_url": "https://github.com/SLedgehammer-dev12/Programlar/tree/Natural-Gas-Prop",
-    "changelog": "Versiyon 5.1.0:\n- Gelişmiş Standartlar (ISO, API, GPA...)\n- NCM/SCM Hacim Dönüşümü\n- Kaydet/Yükle Özelliği\n- Canlı Loglar\n- Hata düzeltmeleri"
+    "version": "5.3.1",
+    "date": "2026-03-31",
+    "download_url": "https://github.com/SLedgehammer-dev12/Programlar/releases/tag/natural-gas-prop-v5.3.1",
+    "changelog": "Versiyon 5.3.1:\n- Standalone Windows EXE paketi güncellendi\n- Otomatik backend fallback akışı düzeltildi\n- Rapor üretimi ve standart koşul gösterimi düzeltildi\n- Güncelleme menüsü release akışına uygun hale getirildi\n- Arayüz ve doğrulama iyileştirmeleri eklendi"
 }

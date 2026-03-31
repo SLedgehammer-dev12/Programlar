@@ -6,12 +6,18 @@ Displays calculation results in a TreeView widget with selectable unit systems.
 
 import tkinter as tk
 from tkinter import ttk
+import customtkinter as ctk
 from typing import List, Tuple, Optional
+import matplotlib
+matplotlib.use("TkAgg")
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+from matplotlib.figure import Figure
+import numpy as np
 
-from natural_gas_g5.models.calculation_result import CalculationResult
+from natural_gas_g5.models.calculation_result import CalculationResult, PhaseEnvelopeData
 
 
-class OutputPanel(ttk.Frame):
+class OutputPanel(ctk.CTkFrame):
     """
     Output panel for displaying calculation results.
     
@@ -35,45 +41,93 @@ class OutputPanel(ttk.Frame):
     def create_widgets(self):
         """Create and layout widgets."""
         # Main label frame
-        main_frame = ttk.LabelFrame(
-            self,
-            text="4. Hesaplama Sonuçları",
-            padding="10"
-        )
+        main_frame = ctk.CTkFrame(self)
         main_frame.pack(fill=tk.BOTH, expand=True)
         
+        ctk.CTkLabel(main_frame, text="4. Hesaplama Sonuçları", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=10, pady=(5, 5))
+        
         # Notebook for tabs
-        self.notebook = ttk.Notebook(main_frame)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
+        self.notebook = ctk.CTkTabview(main_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
         # ============== TAB 1: Results ==============
-        results_tab = ttk.Frame(self.notebook)
-        self.notebook.add(results_tab, text="Sonuçlar")
+        self.notebook.add("Sonuçlar")
+        results_tab = self.notebook.tab("Sonuçlar")
         
-        # Unit system selector
-        unit_select_frame = ttk.Frame(results_tab)
-        unit_select_frame.pack(fill=tk.X, pady=(0, 10))
+        # --- KPI DASHBOARD ---
+        self.kpi_frame = ctk.CTkFrame(results_tab, fg_color="transparent")
+        self.kpi_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Label(unit_select_frame, text="Birim Sistemi:").pack(side=tk.LEFT, padx=(0, 5))
+        # KPI variables
+        self.kpis = {
+            "Z-Faktörü": {"var": ctk.StringVar(value="-"), "unit_var": ctk.StringVar(value="")},
+            "Yoğunluk": {"var": ctk.StringVar(value="-"), "unit_var": ctk.StringVar(value="kg/m³")},
+            "Mol Kütlesi": {"var": ctk.StringVar(value="-"), "unit_var": ctk.StringVar(value="kg/mol")},
+            "HHV": {"var": ctk.StringVar(value="-"), "unit_var": ctk.StringVar(value="MJ/Sm³")}
+        }
         
-        self.unit_system_var = tk.StringVar(value="SI")
-        unit_combo = ttk.Combobox(
+        cols = len(self.kpis)
+        for i, (title, data) in enumerate(self.kpis.items()):
+            card = ctk.CTkFrame(self.kpi_frame, corner_radius=10, fg_color=("gray85", "gray25"))
+            card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+            
+            ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=12)).pack(pady=(5, 0))
+            ctk.CTkLabel(
+                card, 
+                textvariable=data["var"], 
+                font=ctk.CTkFont(size=18, weight="bold"),
+                text_color="#4CAF50"
+            ).pack()
+            ctk.CTkLabel(
+                card,
+                textvariable=data["unit_var"],
+                font=ctk.CTkFont(size=10)
+            ).pack(pady=(0, 5))
+        
+        # --- UNIT SELECTOR & TREEVIEW ---
+        unit_select_frame = ctk.CTkFrame(results_tab, fg_color="transparent")
+        unit_select_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        ctk.CTkLabel(unit_select_frame, text="Birim Sistemi:").pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.unit_system_var = ctk.StringVar(value="SI")
+        unit_combo = ctk.CTkComboBox(
             unit_select_frame,
-            textvariable=self.unit_system_var,
+            variable=self.unit_system_var,
             values=["SI", "Imperial", "Mixed"],
             state="readonly",
-            width=15
+            width=150,
+            command=self._on_unit_change
         )
         unit_combo.pack(side=tk.LEFT)
-        unit_combo.bind('<<ComboboxSelected>>', self._on_unit_change)
         
+        # Apply dark theme styling to Treeview (since it's still a ttk widget)
+        style = ttk.Style()
+        bg_color = "#2b2b2b" if ctk.get_appearance_mode() == "Dark" else "#f0f0f0"
+        fg_color = "white" if ctk.get_appearance_mode() == "Dark" else "black"
+        sel_bg = "#1f538d"
+        
+        style.theme_use("default")
+        style.configure("Treeview",
+                        background=bg_color,
+                        foreground=fg_color,
+                        rowheight=25,
+                        fieldbackground=bg_color)
+        style.map('Treeview', background=[('selected', sel_bg)])
+        style.configure("Treeview.Heading",
+                        background="#3c3c3c" if bg_color == "#2b2b2b" else "#d9d9d9",
+                        foreground=fg_color,
+                        relief="flat")
+        style.map("Treeview.Heading",
+                  background=[('active', "#4c4c4c" if bg_color == "#2b2b2b" else "#e0e0e0")])
+
         # TreeView with columns
         cols = ("Özellik", "Değer", "Birim")
         self.results_tree = ttk.Treeview(
             results_tab,
             columns=cols,
             show="headings",
-            height=20
+            height=15
         )
         
         # Configure columns
@@ -99,53 +153,86 @@ class OutputPanel(ttk.Frame):
         # Configure tag styles
         self.results_tree.tag_configure(
             'header',
-            background='#E0E0E0',
+            background='#3c3c3c' if ctk.get_appearance_mode() == "Dark" else '#E0E0E0',
             font=('TkDefaultFont', 9, 'bold')
         )
         self.results_tree.tag_configure(
             'error_header',
-            background='#FFCCCC',
+            background='#5c2b2b' if ctk.get_appearance_mode() == "Dark" else '#FFCCCC',
+            foreground='white' if ctk.get_appearance_mode() == "Dark" else 'black',
             font=('TkDefaultFont', 9, 'bold')
         )
         
-        # ============== TAB 2: Logs ==============
-        logs_tab = ttk.Frame(self.notebook)
-        self.notebook.add(logs_tab, text="Loglar")
+        # ============== TAB 2: Faz Diyagramı ==============
+        self.notebook.add("Faz Diyagramı")
+        phase_tab = self.notebook.tab("Faz Diyagramı")
+        
+        self.phase_fig = Figure(figsize=(5, 4), dpi=100)
+        self.phase_ax = self.phase_fig.add_subplot(111)
+        
+        # Theme configuration for plot
+        bg_col = '#2b2b2b' if ctk.get_appearance_mode() == "Dark" else '#f0f0f0'
+        fg_col = 'white' if ctk.get_appearance_mode() == "Dark" else 'black'
+        
+        self.phase_fig.patch.set_facecolor(bg_col)
+        self.phase_ax.set_facecolor(bg_col)
+        self.phase_ax.tick_params(colors=fg_col)
+        for spine in self.phase_ax.spines.values():
+            spine.set_edgecolor(fg_col)
+        self.phase_ax.xaxis.label.set_color(fg_col)
+        self.phase_ax.yaxis.label.set_color(fg_col)
+        
+        # Add canvas
+        self.phase_canvas = FigureCanvasTkAgg(self.phase_fig, master=phase_tab)
+        self.phase_canvas.draw()
+        
+        # Add toolbar
+        toolbar_frame = ctk.CTkFrame(phase_tab)
+        toolbar_frame.pack(side=tk.TOP, fill=tk.X)
+        self.phase_toolbar = NavigationToolbar2Tk(self.phase_canvas, toolbar_frame)
+        self.phase_toolbar.update()
+        
+        self.phase_canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # ============== TAB 3: Loglar ==============
+        self.notebook.add("Loglar")
+        logs_tab = self.notebook.tab("Loglar")
         
         # Log level filter
-        filter_frame = ttk.Frame(logs_tab)
+        filter_frame = ctk.CTkFrame(logs_tab, fg_color="transparent")
         filter_frame.pack(fill=tk.X, pady=(0, 5))
         
-        ttk.Label(filter_frame, text="Seviye:").pack(side=tk.LEFT, padx=(0, 5))
+        ctk.CTkLabel(filter_frame, text="Seviye:").pack(side=tk.LEFT, padx=(0, 5))
         
-        self.log_level_var = tk.StringVar(value="Hepsi")
-        level_combo = ttk.Combobox(
+        self.log_level_var = ctk.StringVar(value="Hepsi")
+        level_combo = ctk.CTkComboBox(
             filter_frame,
-            textvariable=self.log_level_var,
+            variable=self.log_level_var,
             values=["Hepsi", "DEBUG", "INFO", "WARNING", "ERROR"],
             state="readonly",
-            width=10
+            width=100,
+            command=self._on_log_level_change
         )
         level_combo.pack(side=tk.LEFT)
-        level_combo.bind('<<ComboboxSelected>>', self._on_log_level_change)
         
         # Clear button
-        ttk.Button(
+        ctk.CTkButton(
             filter_frame,
             text="Temizle",
-            command=self._clear_logs
+            command=self._clear_logs,
+            width=80
         ).pack(side=tk.RIGHT, padx=5)
         
         # Auto-scroll checkbox
-        self.auto_scroll_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        self.auto_scroll_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
             filter_frame,
             text="Otomatik Kaydır",
             variable=self.auto_scroll_var
-        ).pack(side=tk.RIGHT)
+        ).pack(side=tk.RIGHT, padx=10)
         
         # Log text widget
-        log_frame = ttk.Frame(logs_tab)
+        log_frame = ctk.CTkFrame(logs_tab)
         log_frame.pack(fill=tk.BOTH, expand=True)
         
         self.log_text = tk.Text(
@@ -153,22 +240,25 @@ class OutputPanel(ttk.Frame):
             wrap=tk.WORD,
             height=20,
             font=('Consolas', 9),
-            state=tk.DISABLED
+            state=tk.DISABLED,
+            bg="#1e1e1e" if ctk.get_appearance_mode() == "Dark" else "white",
+            fg="#d4d4d4" if ctk.get_appearance_mode() == "Dark" else "black",
+            relief="flat",
+            padx=5, pady=5
         )
         
-        log_scrollbar = ttk.Scrollbar(
-            log_frame,
-            orient=tk.VERTICAL,
-            command=self.log_text.yview
-        )
+        log_scrollbar = ctk.CTkScrollbar(log_frame, command=self.log_text.yview)
+        log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.configure(yscrollcommand=log_scrollbar.set)
         
-        log_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.log_text.pack(fill=tk.BOTH, expand=True)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         # Configure log text tags for colors
         self.log_text.tag_configure("DEBUG", foreground="#888888")
-        self.log_text.tag_configure("INFO", foreground="#000000")
+        self.log_text.tag_configure(
+            "INFO",
+            foreground="#d4d4d4" if ctk.get_appearance_mode() == "Dark" else "#000000"
+        )
         self.log_text.tag_configure("WARNING", foreground="#CC8800")
         self.log_text.tag_configure("ERROR", foreground="#CC0000")
         self.log_text.tag_configure("CRITICAL", foreground="#FF0000", background="#FFEEEE")
@@ -228,8 +318,14 @@ class OutputPanel(ttk.Frame):
             logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s', datefmt='%H:%M:%S')
         )
         
+        # Remove existing TextHandlers to prevent memory leaks and duplicates
+        root_logger = logging.getLogger()
+        for handler in root_logger.handlers[:]:
+            if handler.__class__.__name__ == 'TextHandler':
+                root_logger.removeHandler(handler)
+                
         # Add to root logger
-        logging.getLogger().addHandler(self.text_handler)
+        root_logger.addHandler(self.text_handler)
     
     def _on_log_level_change(self, event=None):
         """Handle log level filter change - refresh display."""
@@ -292,6 +388,24 @@ class OutputPanel(ttk.Frame):
         # Get formatted results with selected unit system
         results_list = result.to_display_list(unit_system=unit_system)
         
+        # Update KPIs
+        # Reset KPIs
+        for kpi in self.kpis.values():
+            kpi["var"].set("-")
+        
+        # Find required values in display list
+        for prop, val, unit in results_list:
+            if "Sıkıştırılabilirlik" in prop:
+                self.kpis["Z-Faktörü"]["var"].set(val)
+            elif "Gerçek - ρ" in prop:
+                self.kpis["Yoğunluk"]["var"].set(val)
+                self.kpis["Yoğunluk"]["unit_var"].set(unit)
+            elif "Mol Kütlesi" in prop:
+                self.kpis["Mol Kütlesi"]["var"].set(val)
+            elif "(Hacimsel)" in prop and "HHV" in prop:
+                self.kpis["HHV"]["var"].set(val)
+                self.kpis["HHV"]["unit_var"].set(unit)
+        
         # Insert into tree
         for prop_name, value, unit in results_list:
             if prop_name.startswith('-'):
@@ -300,6 +414,19 @@ class OutputPanel(ttk.Frame):
             else:
                 # Normal row
                 self.results_tree.insert("", tk.END, values=(prop_name, value, unit))
+                
+        # Update Phase Envelope
+        if result.phase_envelope:
+            self._plot_phase_envelope(
+                result.phase_envelope, 
+                result.actual.temperature, 
+                result.actual.pressure
+            )
+        else:
+            self.phase_ax.clear()
+            msg = "Faz diyagramı oluşturulamadı.\n1. Karışım HEOS için uygun olmayabilir.\n2. SRK/PR algoritmaları grafiği oluşturamamış olabilir."
+            self.phase_ax.text(0.5, 0.5, msg, ha='center', va='center', color='red', transform=self.phase_ax.transAxes)
+            self.phase_canvas.draw()
     
     def _on_unit_change(self, event=None) -> None:
         """
@@ -369,3 +496,89 @@ class OutputPanel(ttk.Frame):
             values = self.results_tree.item(item)['values']
             results.append(tuple(values))
         return results
+
+    def _plot_phase_envelope(self, phase_env_data: PhaseEnvelopeData, current_t: float, current_p: float):
+        """Plot phase envelope data."""
+        self.phase_ax.clear()
+        
+        # Determine colors based on theme
+        is_dark = ctk.get_appearance_mode() == "Dark"
+        text_color = 'white' if is_dark else 'black'
+        grid_color = '#444444' if is_dark else '#dddddd'
+        
+        # Convert K to C, Pa to bar for plotting
+        T = np.array(phase_env_data.temperature_k) - 273.15
+        p = np.array(phase_env_data.pressure_pa) / 100000.0
+        
+        # Operating point
+        op_t = current_t - 273.15
+        op_p = current_p / 100000.0
+        
+        # Plot full curve
+        self.phase_ax.plot(T, p, 'b-', linewidth=2, label='Faz Sınırı (Çiğlenme/Kaynama)')
+        
+        # Plot critical point if exists
+        if phase_env_data.critical_t and phase_env_data.critical_p:
+            crit_t = phase_env_data.critical_t - 273.15
+            crit_p = phase_env_data.critical_p / 100000.0
+            self.phase_ax.plot(crit_t, crit_p, 'rD', markersize=8, label='Kritik Nokta')
+            
+        # Plot operating point
+        self.phase_ax.plot(op_t, op_p, 'g*', markersize=12, label='İşletme Noktası')
+        
+        # Setup graph details
+        self.phase_ax.set_title("Faz Diyagramı (Phase Envelope)", color=text_color, fontweight='bold')
+        self.phase_ax.set_xlabel("Sıcaklık (°C)", color=text_color)
+        self.phase_ax.set_ylabel("Basınç (bar)", color=text_color)
+        self.phase_ax.grid(True, linestyle='--', color=grid_color)
+        
+        self.phase_ax.set_yscale("log")
+        from matplotlib.ticker import ScalarFormatter
+        formatter = ScalarFormatter()
+        formatter.set_scientific(False)
+        self.phase_ax.yaxis.set_major_formatter(formatter)
+        
+        legend = self.phase_ax.legend(loc='best')
+        if is_dark:
+            for text in legend.get_texts():
+                text.set_color("black")
+                
+        self.phase_fig.tight_layout()
+        self.phase_canvas.draw()
+        
+    def save_phase_envelope_plot(self, file_path: str) -> bool:
+        """Save current phase envelope plot to image file."""
+        try:
+            # Ensure we're in a clean state for saving
+            is_dark = ctk.get_appearance_mode() == "Dark"
+            if is_dark:
+                # Temporarily change text color to white for visibility on white PDF background
+                # or just use a white background for the export
+                self.phase_fig.patch.set_facecolor('white')
+                self.phase_ax.set_facecolor('white')
+                self.phase_ax.tick_params(colors='black')
+                for spine in self.phase_ax.spines.values():
+                    spine.set_edgecolor('black')
+                self.phase_ax.xaxis.label.set_color('black')
+                self.phase_ax.yaxis.label.set_color('black')
+                self.phase_ax.title.set_color('black')
+                
+            self.phase_fig.savefig(file_path, dpi=150, bbox_inches='tight')
+            
+            # Restore theme
+            if is_dark:
+                bg_col = '#2b2b2b'
+                fg_col = 'white'
+                self.phase_fig.patch.set_facecolor(bg_col)
+                self.phase_ax.set_facecolor(bg_col)
+                self.phase_ax.tick_params(colors=fg_col)
+                for spine in self.phase_ax.spines.values():
+                    spine.set_edgecolor(fg_col)
+                self.phase_ax.xaxis.label.set_color(fg_col)
+                self.phase_ax.yaxis.label.set_color(fg_col)
+                self.phase_ax.title.set_color(fg_col)
+                self.phase_canvas.draw()
+            return True
+        except Exception as e:
+            print(f"Error saving plot: {e}")
+            return False

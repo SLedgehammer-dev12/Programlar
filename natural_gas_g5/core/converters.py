@@ -179,10 +179,6 @@ def convert_pressure_from_Pa(
         
     Returns:
         Pressure in target unit
-        
-    Examples:
-        >>> convert_pressure_from_Pa(101325, "bar(a)")
-        1.01325
     """
     unit_str = target_unit.value if isinstance(target_unit, PressureUnit) else str(target_unit)
     
@@ -206,4 +202,48 @@ def convert_pressure_from_Pa(
         raise ValidationError(
             "Basınç Birimi",
             f"Geçersiz birim: '{unit_str}'"
+        )
+
+
+class VolumeUnit(str, Enum):
+    """Supported volume units."""
+    M3 = "m³"
+    FT3 = "ft³"
+    LITER = "L"
+
+
+def convert_volume_to_m3(
+    value: float,
+    unit: Union[str, VolumeUnit]
+) -> float:
+    """
+    Convert volume to cubic meters.
+    
+    Args:
+        value: Volume in source unit
+        unit: Source unit (m³, ft³, L)
+        
+    Returns:
+        Volume in cubic meters
+    """
+    try:
+        unit_str = unit.value if isinstance(unit, VolumeUnit) else str(unit)
+        
+        if unit_str == "m³" or unit_str == VolumeUnit.M3:
+            return value
+        elif unit_str == "ft³" or unit_str == VolumeUnit.FT3:
+            return value * 0.0283168
+        elif unit_str == "L" or unit_str == VolumeUnit.LITER:
+            return value / 1000.0
+        else:
+            raise ValidationError(
+                "Hacim Birimi",
+                f"Geçersiz birim: '{unit_str}'. Kullanılabilir: m³, ft³, L"
+            )
+    except Exception as e:
+        if isinstance(e, ValidationError):
+            raise
+        raise ValidationError(
+            "Hacim Dönüşümü",
+            f"Dönüşüm hatası: {str(e)}"
         )

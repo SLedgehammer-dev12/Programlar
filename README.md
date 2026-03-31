@@ -2,7 +2,7 @@
 
 **Modern, modüler termodinamik gaz karışımı hesaplama uygulaması**
 
-![Version](https://img.shields.io/badge/version-5.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-5.3.1-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-green.svg)
 
 ## 🎯 Özellikler
@@ -59,11 +59,12 @@ mixture = GasMixture(
 )
 
 # Hesapla
-calc = ThermoCalculator(backend="HEOS")
+calc = ThermoCalculator()
 result = calc.calculate_properties(
     mixture=mixture,
     temperature_k=298.15,  # 25°C
-    pressure_pa=101325.0   # 1 atm
+    pressure_pa=101325.0,  # 1 atm
+    backend="HEOS"
 )
 
 print(f"Yoğunluk: {result.actual.density:.4f} kg/m³")
@@ -120,7 +121,7 @@ pytest
 pytest --cov=natural_gas_g5 --cov-report=html
 
 # Tek bir test dosyası
-pytest tests/test_calculator.py -v
+pytest tests/test_models.py -v
 ```
 
 ## 📝 Değişiklik Geçmişi
